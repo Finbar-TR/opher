@@ -1,0 +1,99 @@
+@import "tailwindcss";
+
+/* ------------------------------------------------------------------ *
+ * Opher design system — "fresh market": deep produce green, warm sand
+ * background, harvest-amber accent. Light-first, with a dark variant.
+ * ------------------------------------------------------------------ */
+
+@theme {
+  --color-brand-50: #ecfdf3;
+  --color-brand-100: #d1fadf;
+  --color-brand-200: #a6f4c5;
+  --color-brand-300: #6ce9a6;
+  --color-brand-400: #32d583;
+  --color-brand-500: #12b76a;
+  --color-brand-600: #0e9f6e;
+  --color-brand-700: #087443;
+  --color-brand-800: #075e3a;
+  --color-brand-900: #054f31;
+
+  --color-accent-400: #fbbf5c;
+  --color-accent-500: #f59e0b;
+  --color-accent-600: #d97706;
+
+  --color-cream: #faf8f3;
+  --color-surface: #ffffff;
+  --color-ink: #14201a;
+  --color-muted: #5b6b62;
+  --color-line: #e7e3da;
+
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+
+  --radius-xl: 1rem;
+}
+
+:root {
+  --background: var(--color-cream);
+  --foreground: var(--color-ink);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0d1512;
+    --foreground: #e7efe9;
+    --color-surface: #14201b;
+    --color-cream: #0d1512;
+    --color-ink: #e7efe9;
+    --color-muted: #9db0a5;
+    --color-line: #24332b;
+  }
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+}
+
+/* ---- Reusable component classes ---- */
+@layer components {
+  .btn,
+  .btn-primary,
+  .btn-secondary,
+  .btn-accent,
+  .btn-danger {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5
+      text-sm font-semibold transition-colors disabled:opacity-50
+      disabled:cursor-not-allowed;
+  }
+  .btn-primary {
+    @apply bg-brand-700 text-white hover:bg-brand-800;
+  }
+  .btn-secondary {
+    @apply border border-line bg-surface text-ink hover:bg-brand-50;
+  }
+  .btn-accent {
+    @apply bg-accent-500 text-ink hover:bg-accent-600;
+  }
+  .btn-danger {
+    @apply border border-red-200 bg-white text-red-700 hover:bg-red-50;
+  }
+
+  .card {
+    @apply rounded-xl border border-line bg-surface p-6 shadow-sm;
+  }
+
+  .label {
+    @apply block text-sm font-medium text-ink mb-1.5;
+  }
+  .input {
+    @apply w-full rounded-lg border border-line bg-surface px-3.5 py-2.5 text-ink
+      placeholder:text-muted focus:border-brand-500 focus:outline-none
+      focus:ring-2 focus:ring-brand-500/30;
+  }
+  .badge {
+    @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs
+      font-semibold;
+  }
+}

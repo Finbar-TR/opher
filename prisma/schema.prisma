@@ -1,0 +1,150 @@
+// Opher — food aggregation & bulk-buying platform
+// Local dev uses SQLite for zero-setup. For production, switch `provider` to
+// "postgresql" and point DATABASE_URL at your managed Postgres. The schema is
+// intentionally portable: statuses/roles are plain strings (see src/lib/constants.ts)
+// rather than DB enums, and no Postgres-only types are used.
+
+generator client {
+  provider      = "prisma-client-js"
+  // "native" for local dev; "rhel-openssl-3.0.x" for the Vercel serverless runtime.
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// A person with an account. `role` is "member" or "operator" (see constants.ts).
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  name          String
+  passwordHash  String
+  role          String   @default("member")
+  emailVerified Boolean  @default(false)
+  createdAt     DateTime @default(now())
+
+  // Delivery address (required before claiming a portion, so every order is shippable).
+  addrLine1 String?
+  addrLine2 String?
+  addrCity  String?
+  postcode  String?
+  phone     String?
+
+  baskets       Basket[]            @relation("BasketOrganiser")
+  portionClaims PortionClaim[]
+  payments      Payment[]
+  tokens        VerificationToken[]
+}
+
+// One-time tokens for password reset and email verification (token stored hashed).
+model VerificationToken {
+  id        String   @id @default(cuid())
+  userId    String
+  type      String // "password_reset" | "email_verify"
+  tokenHash String   @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+// Operator-curated food item. A bulk unit (e.g. "25kg sack") is divided into
+// `portionsPerBulkUnit` portions; members buy portions. Money stored in pence.
+model Commodity {
+  id                  String   @id @default(cuid())
+  name                String
+  description         String   @default("")
+  imageUrl            String?
+  baseUnit            String // e.g. "kg"
+  bulkUnitLabel       String // e.g. "25kg sack"
+  portionsPerBulkUnit Int
+  pricePerPortion     Int // pence
+  active              Boolean  @default(true)
+  createdAt           DateTime @default(now())
+
+  baskets Basket[]
+  orders  Order[]
+}
+
+// A group buy for one commodity, opened by an organiser. Fills as members claim
+// portions. `targetPortions` is 1..portionsPerBulkUnit (validated in app code).
+model Basket {
+  id             String   @id @default(cuid())
+  commodityId    String
+  organiserId    String
+  title          String
+  targetPortions Int
+  status         String   @default("open") // open|committed|ordered|fulfilled|cancelled
+  inviteCode     String   @unique
+  orderId        String?
+  expiresAt      DateTime? // auto-cancelled after this if still open/committed
+  createdAt      DateTime @default(now())
+
+  commodity Commodity      @relation(fields: [commodityId], references: [id])
+  organiser User           @relation("BasketOrganiser", fields: [organiserId], references: [id])
+  claims    PortionClaim[]
+  order     Order?         @relation(fields: [orderId], references: [id])
+}
+
+// A member's claim of some portions within a basket (joining == claiming).
+model PortionClaim {
+  id        String   @id @default(cuid())
+  basketId  String
+  userId    String
+  portions  Int
+  createdAt DateTime @default(now())
+
+  basket Basket @relation(fields: [basketId], references: [id])
+  user   User   @relation(fields: [userId], references: [id])
+
+  @@unique([basketId, userId])
+}
+
+// One or more whole bulk units purchased, formed from one basket or a merge of
+// complementary committed baskets. Advances through fulfilment states.
+model Order {
+  id          String   @id @default(cuid())
+  commodityId  String
+  bulkUnits    Int       @default(1)
+  status       String    @default("pending_payment") // pending_payment|paid|bought|out_for_delivery|delivered|cancelled
+  paymentDueAt DateTime? // pending_payment orders auto-cancel + refund after this
+  createdAt    DateTime  @default(now())
+
+  commodity Commodity       @relation(fields: [commodityId], references: [id])
+  baskets   Basket[]
+  payments  Payment[]
+  events    DeliveryEvent[]
+}
+
+// A single participant's charge for their portion share (collect-on-order).
+model Payment {
+  id                    String   @id @default(cuid())
+  orderId               String
+  userId                String
+  portions              Int
+  amount                Int // pence
+  status                String   @default("unpaid") // unpaid|paid|refunded
+  stripeSessionId       String?
+  stripePaymentIntentId String? // captured on payment, used for refunds
+  deliveryAddress       String? // snapshot of the member's address at order time
+  createdAt             DateTime @default(now())
+
+  order Order @relation(fields: [orderId], references: [id])
+  user  User  @relation(fields: [userId], references: [id])
+
+  @@unique([orderId, userId])
+}
+
+// Operator-driven delivery status update, shown to members as a timeline.
+model DeliveryEvent {
+  id        String   @id @default(cuid())
+  orderId   String
+  status    String
+  note      String   @default("")
+  createdAt DateTime @default(now())
+
+  order Order @relation(fields: [orderId], references: [id])
+}

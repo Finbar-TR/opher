@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Opher">
+  <rect width="512" height="512" rx="112" fill="#087443"/>
+  <!-- basket -->
+  <path d="M136 224h240l-20 150a40 40 0 0 1-39 34H195a40 40 0 0 1-39-34z" fill="#faf8f3"/>
+  <rect x="120" y="200" width="272" height="34" rx="17" fill="#f59e0b"/>
+  <!-- leaf -->
+  <path d="M256 92c56 24 92 66 92 110 0 8-1 15-3 22-46-6-83-38-98-84a112 112 0 0 1 9-48z" fill="#6ce9a6"/>
+  <path d="M256 92c-56 24-92 66-92 110 0 8 1 15 3 22 46-6 83-38 98-84a112 112 0 0 0-9-48z" fill="#32d583"/>
+</svg>
