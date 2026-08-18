@@ -6,6 +6,7 @@ import { prisma } from "@/lib/prisma";
 import { requireUser } from "@/lib/auth";
 import { stripe, stripeConfigured } from "@/lib/stripe";
 import { markPaymentPaid } from "@/lib/orders";
+import { requestBaseUrl } from "@/lib/base-url";
 
 // Pay the current user's share of an order.
 // - With Stripe configured: creates a hosted Checkout session and redirects to it.
@@ -24,7 +25,7 @@ export async function payShareAction(formData: FormData): Promise<void> {
     redirect(`/orders/${payment.orderId}`);
   }
 
-  const appUrl = process.env.APP_URL || "http://localhost:3000";
+  const baseUrl = await requestBaseUrl();
 
   if (!stripeConfigured() || !stripe) {
     // Dev fallback: settle immediately.
@@ -47,8 +48,8 @@ export async function payShareAction(formData: FormData): Promise<void> {
         quantity: 1,
       },
     ],
-    success_url: `${appUrl}/orders/${payment.orderId}?paid=1`,
-    cancel_url: `${appUrl}/orders/${payment.orderId}`,
+    success_url: `${baseUrl}/orders/${payment.orderId}?paid=1`,
+    cancel_url: `${baseUrl}/orders/${payment.orderId}`,
     client_reference_id: paymentId,
     metadata: { paymentId },
     customer_email: user.email,

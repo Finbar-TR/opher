@@ -3,8 +3,9 @@ import { prisma } from "./prisma";
 import { sendEmail, emailLayout, emailButton } from "./email";
 import { formatGBP } from "./money";
 import { ORDER_STATUS_LABELS, type OrderStatus } from "./constants";
+import { sanitizeAppUrl } from "./base-url";
 
-const appUrl = () => process.env.APP_URL || "http://localhost:3000";
+const appUrl = () => sanitizeAppUrl();
 
 // Password-reset link.
 export async function sendPasswordResetEmail(

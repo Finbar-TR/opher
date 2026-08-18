@@ -4,6 +4,7 @@ import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { formatGBP } from "@/lib/money";
 import { formatDate } from "@/lib/dates";
+import { requestBaseUrl } from "@/lib/base-url";
 import { FillMeter, BasketStatusBadge } from "@/components/ui";
 import { CopyButton } from "@/components/copy-button";
 import { ClaimForm } from "./claim-form";
@@ -42,7 +43,7 @@ export default async function BasketPage({
   const price = basket.commodity.pricePerPortion;
   const totalOwed = filled * price;
 
-  const appUrl = process.env.APP_URL || "http://localhost:3000";
+  const appUrl = await requestBaseUrl();
   const inviteUrl = `${appUrl}/join/${basket.inviteCode}`;
   const isOpen = basket.status === "open";
 
