@@ -9,6 +9,7 @@ import { generateInviteCode } from "@/lib/ids";
 import { tryMergeCommodity } from "@/lib/merge-orders";
 import { hasDeliveryAddress } from "@/lib/address";
 import { daysFromNow } from "@/lib/dates";
+import { outwardCode, zoneCovers } from "@/lib/postcode";
 
 const NEEDS_ADDRESS =
   "Add your delivery address and phone in your account before claiming portions.";
@@ -21,6 +22,7 @@ const createSchema = z.object({
   targetPortions: z.coerce.number().int().min(1, "At least 1 portion"),
   yourPortions: z.coerce.number().int().min(1, "Claim at least 1 portion"),
   closeDays: z.coerce.number().int().min(1).max(90).optional().default(14),
+  visibility: z.enum(["private", "public"]).optional().default("private"),
 });
 
 export async function createBasketAction(
@@ -33,12 +35,16 @@ export async function createBasketAction(
     title: formData.get("title"),
     targetPortions: formData.get("targetPortions"),
     yourPortions: formData.get("yourPortions"),
+    closeDays: formData.get("closeDays") ?? undefined,
+    visibility: formData.get("visibility") ?? undefined,
   });
   if (!parsed.success) {
     return { error: parsed.error.issues[0]?.message ?? "Invalid details" };
   }
-  const { commodityId, title, targetPortions, yourPortions, closeDays } =
+  const { commodityId, title, targetPortions, yourPortions, closeDays, visibility } =
     parsed.data;
+  // Unchecked checkbox is absent; default is "allow merging".
+  const allowMerge = formData.get("allowMerge") !== null;
 
   const fullUser = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
   if (!hasDeliveryAddress(fullUser)) return { error: NEEDS_ADDRESS };
@@ -59,12 +65,32 @@ export async function createBasketAction(
     return { error: "You can't claim more than the basket's target" };
   }
 
+  // Zone gating — only active once the operator has defined live delivery zones.
+  const oc = outwardCode(fullUser.postcode);
+  const zones = await prisma.deliveryZone.findMany({ where: { active: true } });
+  if (zones.length > 0 && !zones.some((z) => zoneCovers(z.outwardCodes, oc))) {
+    const already = await prisma.waitlist.findFirst({
+      where: { email: fullUser.email, postcode: fullUser.postcode ?? "" },
+    });
+    if (!already) {
+      await prisma.waitlist.create({
+        data: { email: fullUser.email, postcode: fullUser.postcode ?? "" },
+      });
+    }
+    return {
+      error: `We're not delivering to ${oc ?? "your area"} yet — you're on the waitlist and we'll let you know when we launch there.`,
+    };
+  }
+
   const basket = await prisma.basket.create({
     data: {
       commodityId,
       organiserId: user.id,
       title,
       targetPortions,
+      visibility,
+      allowMerge,
+      outwardCode: oc,
       inviteCode: generateInviteCode(),
       expiresAt: daysFromNow(closeDays),
       claims: { create: { userId: user.id, portions: yourPortions } },

@@ -49,6 +49,8 @@ export default async function NewBasketPage({
         bulkUnitLabel={commodity.bulkUnitLabel}
         portionsPerBulkUnit={commodity.portionsPerBulkUnit}
         pricePerPortion={commodity.pricePerPortion}
+        shopPricePerPortion={commodity.shopPricePerPortion}
+        deliveryLeadDays={commodity.deliveryLeadDays}
       />
     </div>
   );

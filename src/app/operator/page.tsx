@@ -34,6 +34,14 @@ export default async function OperatorHome() {
           <p className="mt-1 text-3xl font-bold text-ink">{orders}</p>
           <p className="mt-2 text-sm text-brand-700">Fulfil orders →</p>
         </Link>
+        <Link href="/operator/zones" className="card hover:shadow-md">
+          <p className="text-sm text-muted">Delivery zones</p>
+          <p className="mt-2 text-sm text-brand-700">Manage launch areas →</p>
+        </Link>
+        <Link href="/operator/insights" className="card hover:shadow-md">
+          <p className="text-sm text-muted">Insights</p>
+          <p className="mt-2 text-sm text-brand-700">Demand &amp; savings →</p>
+        </Link>
       </div>
     </div>
   );

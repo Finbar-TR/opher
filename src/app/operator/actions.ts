@@ -16,6 +16,7 @@ export type CommodityState = { error?: string };
 const commoditySchema = z.object({
   name: z.string().trim().min(1, "Name is required").max(80),
   description: z.string().trim().max(500).optional().default(""),
+  category: z.string().trim().min(1, "Category is required").max(40),
   imageUrl: z
     .union([z.string().trim().url("Enter a valid image URL"), z.literal("")])
     .optional(),
@@ -30,18 +31,52 @@ const commoditySchema = z.object({
     .number()
     .min(0.01, "Enter a price")
     .max(100000),
+  shopPricePerPortionPounds: z
+    .union([z.literal(""), z.coerce.number().min(0.01).max(100000)])
+    .optional(),
+  deliveryFeePounds: z.coerce.number().min(0).max(100000),
+  deliveryLeadDays: z.coerce
+    .number()
+    .int("Must be a whole number")
+    .min(1, "At least 1 day")
+    .max(60),
 });
 
 function parseForm(formData: FormData) {
   return commoditySchema.safeParse({
     name: formData.get("name"),
     description: formData.get("description") ?? "",
+    category: formData.get("category") ?? "Food",
     imageUrl: formData.get("imageUrl") ?? "",
     baseUnit: formData.get("baseUnit"),
     bulkUnitLabel: formData.get("bulkUnitLabel"),
     portionsPerBulkUnit: formData.get("portionsPerBulkUnit"),
     pricePerPortionPounds: formData.get("pricePerPortionPounds"),
+    shopPricePerPortionPounds: formData.get("shopPricePerPortionPounds") ?? "",
+    deliveryFeePounds: formData.get("deliveryFeePounds") ?? "0",
+    deliveryLeadDays: formData.get("deliveryLeadDays") ?? "7",
   });
+}
+
+// Build the shared commodity data payload from a parsed form.
+function commodityData(d: z.infer<typeof commoditySchema>) {
+  const shop =
+    d.shopPricePerPortionPounds === "" || d.shopPricePerPortionPounds == null
+      ? null
+      : poundsToPence(d.shopPricePerPortionPounds);
+  return {
+    name: d.name,
+    description: d.description ?? "",
+    category: d.category,
+    imageUrl: d.imageUrl ? d.imageUrl : null,
+    baseUnit: d.baseUnit,
+    bulkUnitLabel: d.bulkUnitLabel,
+    portionsPerBulkUnit: d.portionsPerBulkUnit,
+    pricePerPortion: poundsToPence(d.pricePerPortionPounds),
+    shopPricePerPortion: shop,
+    deliveryFee: poundsToPence(d.deliveryFeePounds),
+    deliveryLeadDays: d.deliveryLeadDays,
+  };
 }
 
 export async function createCommodityAction(
@@ -53,18 +88,7 @@ export async function createCommodityAction(
   if (!parsed.success) {
     return { error: parsed.error.issues[0]?.message ?? "Invalid details" };
   }
-  const d = parsed.data;
-  await prisma.commodity.create({
-    data: {
-      name: d.name,
-      description: d.description ?? "",
-      imageUrl: d.imageUrl ? d.imageUrl : null,
-      baseUnit: d.baseUnit,
-      bulkUnitLabel: d.bulkUnitLabel,
-      portionsPerBulkUnit: d.portionsPerBulkUnit,
-      pricePerPortion: poundsToPence(d.pricePerPortionPounds),
-    },
-  });
+  await prisma.commodity.create({ data: commodityData(parsed.data) });
   revalidatePath("/operator/commodities");
   revalidatePath("/catalog");
   redirect("/operator/commodities");
@@ -80,18 +104,9 @@ export async function updateCommodityAction(
   if (!parsed.success) {
     return { error: parsed.error.issues[0]?.message ?? "Invalid details" };
   }
-  const d = parsed.data;
   await prisma.commodity.update({
     where: { id },
-    data: {
-      name: d.name,
-      description: d.description ?? "",
-      imageUrl: d.imageUrl ? d.imageUrl : null,
-      baseUnit: d.baseUnit,
-      bulkUnitLabel: d.bulkUnitLabel,
-      portionsPerBulkUnit: d.portionsPerBulkUnit,
-      pricePerPortion: poundsToPence(d.pricePerPortionPounds),
-    },
+    data: commodityData(parsed.data),
   });
   revalidatePath("/operator/commodities");
   revalidatePath("/catalog");
@@ -150,6 +165,37 @@ export async function cancelOrderAction(formData: FormData): Promise<void> {
   revalidatePath(`/operator/orders/${orderId}`);
   revalidatePath(`/operator/orders`);
   revalidatePath(`/orders/${orderId}`);
+}
+
+export type ZoneState = { error?: string };
+
+export async function createZoneAction(
+  _prev: ZoneState,
+  formData: FormData
+): Promise<ZoneState> {
+  await requireOperator();
+  const name = String(formData.get("name") ?? "").trim();
+  const outwardCodes = String(formData.get("outwardCodes") ?? "")
+    .trim()
+    .toUpperCase();
+  if (!name || !outwardCodes) {
+    return { error: "Name and at least one outward code are required" };
+  }
+  await prisma.deliveryZone.create({ data: { name, outwardCodes } });
+  revalidatePath("/operator/zones");
+  return {};
+}
+
+export async function toggleZoneActiveAction(formData: FormData): Promise<void> {
+  await requireOperator();
+  const id = String(formData.get("id"));
+  const zone = await prisma.deliveryZone.findUnique({ where: { id } });
+  if (!zone) return;
+  await prisma.deliveryZone.update({
+    where: { id },
+    data: { active: !zone.active },
+  });
+  revalidatePath("/operator/zones");
 }
 
 export async function toggleCommodityActiveAction(formData: FormData): Promise<void> {

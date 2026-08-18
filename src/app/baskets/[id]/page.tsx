@@ -2,10 +2,15 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { formatGBP } from "@/lib/money";
+import { formatGBP, savings } from "@/lib/money";
 import { formatDate } from "@/lib/dates";
 import { requestBaseUrl } from "@/lib/base-url";
-import { FillMeter, BasketStatusBadge } from "@/components/ui";
+import {
+  FillMeter,
+  BasketStatusBadge,
+  SavingsBadge,
+  NoFillNoFee,
+} from "@/components/ui";
 import { CopyButton } from "@/components/copy-button";
 import { ClaimForm } from "./claim-form";
 import {
@@ -47,6 +52,14 @@ export default async function BasketPage({
   const inviteUrl = `${appUrl}/join/${basket.inviteCode}`;
   const isOpen = basket.status === "open";
 
+  const s = savings(price, basket.commodity.shopPricePerPortion);
+  const basketSavings = s ? s.perPortion * filled : 0;
+  const deliveryFee = basket.commodity.deliveryFee;
+  const shareText = `Join our group buy for ${basket.commodity.name} on Opher${
+    s ? ` — save ${formatGBP(s.perPortion)}/portion vs shop` : ""
+  } — ${inviteUrl}`;
+  const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(shareText)}`;
+
   return (
     <div className="mx-auto max-w-3xl space-y-6">
       <div>
@@ -66,6 +79,12 @@ export default async function BasketPage({
           </Link>{" "}
           · {basket.commodity.bulkUnitLabel} · {formatGBP(price)} / portion
         </p>
+        <div className="mt-2">
+          <SavingsBadge
+            pricePerPortion={price}
+            shopPricePerPortion={basket.commodity.shopPricePerPortion}
+          />
+        </div>
       </div>
 
       {basket.orderId && (
@@ -85,8 +104,14 @@ export default async function BasketPage({
           <FillMeter filled={filled} total={basket.targetPortions} />
         </div>
         {isOpen && remaining > 0 && (
-          <p className="mt-3 text-sm text-muted">
-            {remaining} portion(s) still available.
+          <p
+            className={`mt-3 text-sm ${
+              remaining === 1 ? "font-semibold text-accent-600" : "text-muted"
+            }`}
+          >
+            {remaining === 1
+              ? "Just 1 portion left to complete this basket!"
+              : `${remaining} portions still available.`}
           </p>
         )}
         {(basket.status === "open" || basket.status === "committed") &&
@@ -95,6 +120,19 @@ export default async function BasketPage({
               Closes {formatDate(basket.expiresAt)} if it hasn&apos;t merged.
             </p>
           )}
+        <p className="mt-1 text-sm text-muted">
+          Delivery about {basket.commodity.deliveryLeadDays} days after it completes.
+        </p>
+        {basketSavings > 0 && (
+          <p className="mt-1 text-sm font-medium text-accent-600">
+            This basket saves {formatGBP(basketSavings)} vs shop prices so far.
+          </p>
+        )}
+        {isOpen && (
+          <div className="mt-4">
+            <NoFillNoFee />
+          </div>
+        )}
       </div>
 
       {/* Shared ledger */}
@@ -167,13 +205,26 @@ export default async function BasketPage({
           />
 
           <div className="border-t border-line pt-5">
-            <p className="label">Invite others</p>
+            <p className="label">Invite your group</p>
             <div className="flex flex-wrap items-center gap-3">
               <code className="rounded-lg bg-brand-50 px-3 py-2 text-sm font-semibold text-brand-800">
                 {basket.inviteCode}
               </code>
               <CopyButton value={inviteUrl} />
+              <a
+                href={whatsappUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="btn-primary py-2"
+              >
+                Share on WhatsApp
+              </a>
             </div>
+            <p className="mt-2 text-xs text-muted">
+              {deliveryFee > 0
+                ? `Delivery is ${formatGBP(deliveryFee)} per person — free for you as the organiser.`
+                : "Anyone with the link can join and claim portions."}
+            </p>
           </div>
 
           <div className="flex flex-wrap gap-3 border-t border-line pt-5">

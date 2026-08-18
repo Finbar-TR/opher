@@ -2,8 +2,9 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { formatGBP } from "@/lib/money";
+import { formatGBP, savings } from "@/lib/money";
 import { formatDate } from "@/lib/dates";
+import { requestBaseUrl } from "@/lib/base-url";
 import { OrderStatusBadge, DeliveryTimeline } from "@/components/ui";
 import { payShareAction } from "../actions";
 
@@ -39,6 +40,15 @@ export default async function OrderDetailPage({
   const totalAmount = order.payments.reduce((s, p) => s + p.amount, 0);
   const allPaid = order.payments.every((p) => p.status === "paid");
 
+  const sv = savings(
+    order.commodity.pricePerPortion,
+    order.commodity.shopPricePerPortion
+  );
+  const totalSavings = sv ? sv.perPortion * totalPortions : 0;
+  const appUrl = await requestBaseUrl();
+  const shareText = `We saved ${formatGBP(totalSavings)} bulk-buying ${order.commodity.name} together on Opher! ${appUrl}/catalog/${order.commodityId}`;
+  const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(shareText)}`;
+
   return (
     <div className="mx-auto max-w-3xl space-y-6">
       <div>
@@ -59,7 +69,28 @@ export default async function OrderDetailPage({
             refunded.
           </p>
         )}
+        {order.status !== "cancelled" && order.estimatedDeliveryAt && (
+          <p className="mt-1 text-sm text-brand-700">
+            Estimated delivery by {formatDate(order.estimatedDeliveryAt)}.
+          </p>
+        )}
       </div>
+
+      {totalSavings > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-accent-400 bg-accent-400/10 px-4 py-3">
+          <p className="text-sm font-semibold text-accent-600">
+            Your group saved {formatGBP(totalSavings)} vs shop prices. 🎉
+          </p>
+          <a
+            href={whatsappUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="btn-primary py-2"
+          >
+            Share on WhatsApp
+          </a>
+        </div>
+      )}
 
       {paid && myPayment?.status === "paid" && (
         <div className="rounded-xl border border-brand-200 bg-brand-50 px-4 py-3 text-sm text-brand-800">
@@ -77,6 +108,14 @@ export default async function OrderDetailPage({
             <p className="text-ink">
               {myPayment.portions} portion(s) ·{" "}
               <span className="font-semibold">{formatGBP(myPayment.amount)}</span>
+              {myPayment.deliveryFee > 0 ? (
+                <span className="text-xs text-muted">
+                  {" "}
+                  (incl. {formatGBP(myPayment.deliveryFee)} delivery)
+                </span>
+              ) : order.commodity.deliveryFee > 0 ? (
+                <span className="text-xs text-brand-700"> · delivery free (organiser)</span>
+              ) : null}
             </p>
             {myPayment.status === "paid" ? (
               <span className="badge bg-brand-100 text-brand-800">Paid</span>

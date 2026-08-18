@@ -6,11 +6,15 @@ import type { CommodityState } from "../actions";
 export type CommodityInitial = {
   name: string;
   description: string;
+  category: string;
   imageUrl: string;
   baseUnit: string;
   bulkUnitLabel: string;
   portionsPerBulkUnit: number;
   pricePerPortionPounds: number;
+  shopPricePerPortionPounds: number | "";
+  deliveryFeePounds: number;
+  deliveryLeadDays: number;
 };
 
 export function CommodityForm({
@@ -46,17 +50,32 @@ export function CommodityForm({
         />
       </div>
 
-      <div>
-        <label className="label" htmlFor="imageUrl">
-          Image URL (optional)
-        </label>
-        <input
-          id="imageUrl"
-          name="imageUrl"
-          className="input"
-          placeholder="https://…"
-          defaultValue={initial?.imageUrl}
-        />
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div>
+          <label className="label" htmlFor="category">
+            Category
+          </label>
+          <input
+            id="category"
+            name="category"
+            className="input"
+            placeholder="e.g. Grains"
+            defaultValue={initial?.category ?? "Food"}
+            required
+          />
+        </div>
+        <div>
+          <label className="label" htmlFor="imageUrl">
+            Image URL (optional)
+          </label>
+          <input
+            id="imageUrl"
+            name="imageUrl"
+            className="input"
+            placeholder="https://…"
+            defaultValue={initial?.imageUrl}
+          />
+        </div>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2">
@@ -111,6 +130,52 @@ export function CommodityForm({
             step="0.01"
             className="input"
             defaultValue={initial?.pricePerPortionPounds}
+            required
+          />
+        </div>
+        <div>
+          <label className="label" htmlFor="shopPricePerPortionPounds">
+            Typical shop price per portion (£, optional)
+          </label>
+          <input
+            id="shopPricePerPortionPounds"
+            name="shopPricePerPortionPounds"
+            type="number"
+            min={0.01}
+            step="0.01"
+            className="input"
+            placeholder="drives the 'you save £X' badge"
+            defaultValue={initial?.shopPricePerPortionPounds}
+          />
+        </div>
+        <div>
+          <label className="label" htmlFor="deliveryFeePounds">
+            Delivery fee per person (£)
+          </label>
+          <input
+            id="deliveryFeePounds"
+            name="deliveryFeePounds"
+            type="number"
+            min={0}
+            step="0.01"
+            className="input"
+            defaultValue={initial?.deliveryFeePounds ?? 0}
+            required
+          />
+        </div>
+        <div>
+          <label className="label" htmlFor="deliveryLeadDays">
+            Delivery lead time (days)
+          </label>
+          <input
+            id="deliveryLeadDays"
+            name="deliveryLeadDays"
+            type="number"
+            min={1}
+            max={60}
+            step={1}
+            className="input"
+            defaultValue={initial?.deliveryLeadDays ?? 7}
             required
           />
         </div>

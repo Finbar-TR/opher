@@ -99,6 +99,7 @@ export default async function DemandPage() {
                         <p className="text-sm font-medium text-ink">{b.title}</p>
                         <p className="text-xs text-muted">
                           by {b.organiser.name}
+                          {b.outwardCode ? ` · zone ${b.outwardCode}` : ""}
                         </p>
                         <div className="mt-2">
                           <FillMeter filled={filled} total={unit} />

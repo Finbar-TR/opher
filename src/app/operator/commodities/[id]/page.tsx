@@ -31,11 +31,18 @@ export default async function EditCommodityPage({
         initial={{
           name: commodity.name,
           description: commodity.description,
+          category: commodity.category,
           imageUrl: commodity.imageUrl ?? "",
           baseUnit: commodity.baseUnit,
           bulkUnitLabel: commodity.bulkUnitLabel,
           portionsPerBulkUnit: commodity.portionsPerBulkUnit,
           pricePerPortionPounds: commodity.pricePerPortion / 100,
+          shopPricePerPortionPounds:
+            commodity.shopPricePerPortion != null
+              ? commodity.shopPricePerPortion / 100
+              : "",
+          deliveryFeePounds: commodity.deliveryFee / 100,
+          deliveryLeadDays: commodity.deliveryLeadDays,
         }}
       />
     </div>

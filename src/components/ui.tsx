@@ -6,6 +6,39 @@ import {
   type OrderStatus,
 } from "@/lib/constants";
 import { formatDateTime } from "@/lib/dates";
+import { formatGBP, savings } from "@/lib/money";
+
+// "Save £X (Y%) vs shop" — renders nothing when there's no shop price / no saving.
+export function SavingsBadge({
+  pricePerPortion,
+  shopPricePerPortion,
+  className = "",
+}: {
+  pricePerPortion: number;
+  shopPricePerPortion: number | null;
+  className?: string;
+}) {
+  const s = savings(pricePerPortion, shopPricePerPortion);
+  if (!s) return null;
+  return (
+    <span className={`badge bg-accent-400/25 text-accent-600 ${className}`}>
+      Save {formatGBP(s.perPortion)} ({s.percent}%) vs shop
+    </span>
+  );
+}
+
+// Reassurance that money only moves when a basket completes.
+export function NoFillNoFee() {
+  return (
+    <div className="flex items-start gap-2 rounded-lg bg-brand-50 px-3 py-2 text-sm text-brand-800">
+      <span aria-hidden>✓</span>
+      <span>
+        <strong>No fill, no fee.</strong> You&apos;re only charged when the basket
+        completes. If it doesn&apos;t fill, you pay nothing.
+      </span>
+    </div>
+  );
+}
 
 // A row of portion cells: filled cells are brand-green, empty are grey.
 export function FillMeter({

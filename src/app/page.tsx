@@ -25,6 +25,9 @@ export default async function HomePage() {
             See what&apos;s available
           </Link>
         </div>
+        <p className="mt-5 text-sm font-medium text-brand-700">
+          ✓ No fill, no fee — you&apos;re only charged when a basket completes.
+        </p>
       </section>
 
       {/* The merge idea, illustrated */}

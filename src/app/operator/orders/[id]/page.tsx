@@ -63,6 +63,12 @@ export default async function OperatorOrderDetailPage({
             Auto-cancels & refunds if unpaid by {formatDate(order.paymentDueAt)}.
           </p>
         )}
+        <p className="mt-1 text-sm text-muted">
+          {order.outwardCode ? `Zone ${order.outwardCode} · ` : ""}
+          {order.estimatedDeliveryAt
+            ? `Est. delivery by ${formatDate(order.estimatedDeliveryAt)}`
+            : ""}
+        </p>
       </div>
 
       {/* Fulfilment control */}

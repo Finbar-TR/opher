@@ -51,22 +51,45 @@ model VerificationToken {
   user User @relation(fields: [userId], references: [id])
 }
 
-// Operator-curated food item. A bulk unit (e.g. "25kg sack") is divided into
+// Operator-curated item. A bulk unit (e.g. "25kg sack") is divided into
 // `portionsPerBulkUnit` portions; members buy portions. Money stored in pence.
+// Product-agnostic: `category` lets the same engine carry non-food later.
 model Commodity {
   id                  String   @id @default(cuid())
   name                String
   description         String   @default("")
   imageUrl            String?
+  category            String   @default("Food") // operator-defined grouping
   baseUnit            String // e.g. "kg"
   bulkUnitLabel       String // e.g. "25kg sack"
   portionsPerBulkUnit Int
   pricePerPortion     Int // pence
+  shopPricePerPortion Int? // typical shop price per portion, for "you save £X"
+  deliveryFee         Int      @default(0) // pence per participant per order
+  deliveryLeadDays    Int      @default(7) // days from order completion to delivery
   active              Boolean  @default(true)
   createdAt           DateTime @default(now())
 
   baskets Basket[]
   orders  Order[]
+}
+
+// A delivery area, defined by covered outward postcode codes (e.g. "M14,M16").
+// Only baskets in an active zone can be created — the one-cluster launch gate.
+model DeliveryZone {
+  id           String   @id @default(cuid())
+  name         String
+  outwardCodes String // comma-separated outward codes, uppercased
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+}
+
+// Demand captured from people outside any live zone — signals where to expand.
+model Waitlist {
+  id        String   @id @default(cuid())
+  email     String
+  postcode  String
+  createdAt DateTime @default(now())
 }
 
 // A group buy for one commodity, opened by an organiser. Fills as members claim
@@ -78,6 +101,9 @@ model Basket {
   title          String
   targetPortions Int
   status         String   @default("open") // open|committed|ordered|fulfilled|cancelled
+  visibility     String   @default("private") // private (invite-only) | public (discoverable)
+  allowMerge     Boolean  @default(true) // may combine with nearby baskets to fill a unit
+  outwardCode    String? // delivery zone, derived from organiser's postcode
   inviteCode     String   @unique
   orderId        String?
   expiresAt      DateTime? // auto-cancelled after this if still open/committed
@@ -107,11 +133,13 @@ model PortionClaim {
 // complementary committed baskets. Advances through fulfilment states.
 model Order {
   id          String   @id @default(cuid())
-  commodityId  String
-  bulkUnits    Int       @default(1)
-  status       String    @default("pending_payment") // pending_payment|paid|bought|out_for_delivery|delivered|cancelled
-  paymentDueAt DateTime? // pending_payment orders auto-cancel + refund after this
-  createdAt    DateTime  @default(now())
+  commodityId       String
+  bulkUnits         Int       @default(1)
+  status            String    @default("pending_payment") // pending_payment|paid|bought|out_for_delivery|delivered|cancelled
+  outwardCode       String? // delivery zone of the merged baskets
+  paymentDueAt      DateTime? // pending_payment orders auto-cancel + refund after this
+  estimatedDeliveryAt DateTime? // projected delivery date, set at order creation
+  createdAt         DateTime  @default(now())
 
   commodity Commodity       @relation(fields: [commodityId], references: [id])
   baskets   Basket[]
@@ -125,7 +153,8 @@ model Payment {
   orderId               String
   userId                String
   portions              Int
-  amount                Int // pence
+  amount                Int // pence — portions*pricePerPortion + deliveryFee
+  deliveryFee           Int      @default(0) // pence (waived to 0 for the organiser)
   status                String   @default("unpaid") // unpaid|paid|refunded
   stripeSessionId       String?
   stripePaymentIntentId String? // captured on payment, used for refunds
