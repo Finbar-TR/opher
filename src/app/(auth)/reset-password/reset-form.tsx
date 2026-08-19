@@ -12,7 +12,7 @@ export function ResetForm({ token }: { token: string }) {
   return (
     <div className="mx-auto max-w-sm">
       <div className="card">
-        <h1 className="text-2xl font-bold text-ink">Choose a new password</h1>
+        <h1 className="font-display text-[32px] leading-tight text-ink">Choose a new password</h1>
         <form action={action} className="mt-6 space-y-4">
           <input type="hidden" name="token" value={token} />
           <div>
@@ -29,7 +29,7 @@ export function ResetForm({ token }: { token: string }) {
             />
           </div>
           {state.error && (
-            <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
+            <p className="rounded-lg bg-saffron px-3 py-2 text-sm font-medium text-tomato-press">
               {state.error}
             </p>
           )}

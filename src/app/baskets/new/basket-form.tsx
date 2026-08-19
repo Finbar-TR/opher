@@ -142,7 +142,7 @@ export function BasketForm({
       </label>
 
       {state.error && (
-        <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
+        <p className="rounded-lg bg-saffron px-3 py-2 text-sm font-medium text-tomato-press">
           {state.error}
         </p>
       )}

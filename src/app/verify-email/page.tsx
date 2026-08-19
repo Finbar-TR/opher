@@ -27,7 +27,7 @@ export default async function VerifyEmailPage({
     <div className="mx-auto max-w-sm text-center">
       <div className="card">
         <img src="/icon.svg" width={56} height={56} alt="" className="mx-auto" />
-        <h1 className="mt-4 text-2xl font-bold text-ink">
+        <h1 className="mt-4 font-display text-[32px] leading-tight text-ink">
           {ok ? "Email confirmed" : "Link invalid or expired"}
         </h1>
         <p className="mt-1 text-sm text-muted">

@@ -20,7 +20,7 @@ export default async function OperatorOrdersPage() {
         <Link href="/operator" className="text-sm text-muted hover:underline">
           ← Operator
         </Link>
-        <h1 className="mt-2 text-3xl font-bold text-ink">Orders</h1>
+        <h1 className="mt-2 font-display text-[38px] leading-tight text-ink">Orders</h1>
         <p className="mt-1 text-muted">Fulfil bulk buys and update delivery.</p>
       </div>
 

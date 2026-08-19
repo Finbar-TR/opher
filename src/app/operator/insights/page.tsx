@@ -55,7 +55,7 @@ export default async function InsightsPage() {
         <Link href="/operator" className="text-sm text-muted hover:underline">
           ← Operator
         </Link>
-        <h1 className="mt-2 text-3xl font-bold text-ink">Insights</h1>
+        <h1 className="mt-2 font-display text-[38px] leading-tight text-ink">Insights</h1>
         <p className="mt-1 text-muted">Where demand is building, and what to launch next.</p>
       </div>
 

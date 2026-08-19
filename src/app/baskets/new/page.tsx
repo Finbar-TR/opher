@@ -17,7 +17,7 @@ export default async function NewBasketPage({
   if (!commodityId) {
     return (
       <div className="mx-auto max-w-2xl">
-        <h1 className="text-2xl font-bold text-ink">Start a basket</h1>
+        <h1 className="font-display text-[32px] leading-tight text-ink">Start a basket</h1>
         <p className="mt-2 text-muted">
           Choose a commodity from the{" "}
           <Link href="/catalog" className="text-brand-700 hover:underline">
@@ -42,7 +42,7 @@ export default async function NewBasketPage({
       >
         ← Back to {commodity.name}
       </Link>
-      <h1 className="mb-6 mt-4 text-3xl font-bold text-ink">Start a basket</h1>
+      <h1 className="mb-6 mt-4 font-display text-[38px] leading-tight text-ink">Start a basket</h1>
       <BasketForm
         commodityId={commodity.id}
         commodityName={commodity.name}

@@ -24,7 +24,7 @@ export default async function EditCommodityPage({
       <Link href="/operator/commodities" className="text-sm text-muted hover:underline">
         ← Back to commodities
       </Link>
-      <h1 className="mb-6 mt-4 text-3xl font-bold text-ink">Edit {commodity.name}</h1>
+      <h1 className="mb-6 mt-4 font-display text-[38px] leading-tight text-ink">Edit {commodity.name}</h1>
       <CommodityForm
         action={action}
         submitLabel="Save changes"

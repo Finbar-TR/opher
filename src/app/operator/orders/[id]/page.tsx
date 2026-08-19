@@ -51,7 +51,7 @@ export default async function OperatorOrderDetailPage({
           ← All orders
         </Link>
         <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
-          <h1 className="text-3xl font-bold text-ink">{order.commodity.name}</h1>
+          <h1 className="font-display text-[38px] leading-tight text-ink">{order.commodity.name}</h1>
           <OrderStatusBadge status={order.status} />
         </div>
         <p className="mt-1 text-muted">

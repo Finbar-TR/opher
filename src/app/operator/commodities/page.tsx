@@ -16,7 +16,7 @@ export default async function OperatorCommoditiesPage() {
     <div>
       <div className="mb-6 flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-ink">Commodities</h1>
+          <h1 className="font-display text-[38px] leading-tight text-ink">Commodities</h1>
           <p className="mt-1 text-muted">The curated catalog members buy from.</p>
         </div>
         <Link href="/operator/commodities/new" className="btn-primary">

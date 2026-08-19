@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { FillMeter, BasketStatusBadge } from "@/components/ui";
+import { ProgressBar, BasketStatusBadge } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
 
@@ -10,10 +10,7 @@ export default async function MyBasketsPage() {
 
   const baskets = await prisma.basket.findMany({
     where: {
-      OR: [
-        { organiserId: user.id },
-        { claims: { some: { userId: user.id } } },
-      ],
+      OR: [{ organiserId: user.id }, { claims: { some: { userId: user.id } } }],
     },
     include: { commodity: true, claims: true },
     orderBy: { createdAt: "desc" },
@@ -21,9 +18,11 @@ export default async function MyBasketsPage() {
 
   return (
     <div>
-      <div className="mb-6 flex items-center justify-between">
+      <div className="mb-6 flex items-end justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold text-ink">My baskets</h1>
+          <h1 className="font-display text-[38px] leading-tight text-ink sm:text-[46px]">
+            My baskets
+          </h1>
           <p className="mt-1 text-muted">Baskets you organise or have joined.</p>
         </div>
         <Link href="/catalog" className="btn-primary">
@@ -32,27 +31,42 @@ export default async function MyBasketsPage() {
       </div>
 
       {baskets.length === 0 ? (
-        <div className="card text-center text-muted">
+        <div className="card text-center text-soft">
           You haven&apos;t joined any baskets yet.{" "}
-          <Link href="/catalog" className="text-brand-700 hover:underline">
+          <Link href="/catalog" className="font-bold text-tomato hover:underline">
             Browse the catalog
           </Link>{" "}
           to begin.
         </div>
       ) : (
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid gap-5 sm:grid-cols-2">
           {baskets.map((b) => {
             const filled = b.claims.reduce((s, c) => s + c.portions, 0);
+            const fulfilling = b.status === "ordered" || b.status === "fulfilled";
             return (
-              <Link key={b.id} href={`/baskets/${b.id}`} className="card hover:shadow-md">
-                <div className="flex items-center justify-between gap-2">
-                  <h2 className="font-semibold text-ink">{b.title}</h2>
+              <Link
+                key={b.id}
+                href={fulfilling && b.orderId ? `/orders/${b.orderId}` : `/baskets/${b.id}`}
+                className="card transition hover:border-line-strong hover:shadow-[0_8px_20px_rgba(122,60,20,0.10)]"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <h2 className="font-display text-[24px] leading-tight text-ink sm:text-[26px]">
+                    {b.title}
+                  </h2>
                   <BasketStatusBadge status={b.status} />
                 </div>
-                <p className="mt-1 text-sm text-muted">{b.commodity.name}</p>
+                <p className="mt-1 text-[13px] font-semibold text-soft">
+                  {b.commodity.name} · {b.commodity.bulkUnitLabel}
+                </p>
                 <div className="mt-4">
-                  <FillMeter filled={filled} total={b.targetPortions} />
+                  <ProgressBar filled={filled} total={b.targetPortions} />
+                  <p className="mt-1 text-xs font-semibold text-soft">
+                    {filled}/{b.targetPortions} portions
+                  </p>
                 </div>
+                <p className="mt-4 text-sm font-bold text-tomato">
+                  {fulfilling ? "Track delivery →" : "Open basket →"}
+                </p>
               </Link>
             );
           })}

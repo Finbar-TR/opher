@@ -13,7 +13,7 @@ export function ForgotForm() {
   return (
     <div className="mx-auto max-w-sm">
       <div className="card">
-        <h1 className="text-2xl font-bold text-ink">Reset your password</h1>
+        <h1 className="font-display text-[32px] leading-tight text-ink">Reset your password</h1>
         <p className="mt-1 text-sm text-muted">
           Enter your email and we&apos;ll send a reset link.
         </p>
@@ -25,7 +25,7 @@ export function ForgotForm() {
             <input id="email" name="email" type="email" className="input" required />
           </div>
           {state.error && (
-            <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
+            <p className="rounded-lg bg-saffron px-3 py-2 text-sm font-medium text-tomato-press">
               {state.error}
             </p>
           )}

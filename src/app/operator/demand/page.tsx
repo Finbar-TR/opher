@@ -35,7 +35,7 @@ export default async function DemandPage() {
         <Link href="/operator" className="text-sm text-muted hover:underline">
           ← Operator
         </Link>
-        <h1 className="mt-2 text-3xl font-bold text-ink">Demand &amp; merges</h1>
+        <h1 className="mt-2 font-display text-[38px] leading-tight text-ink">Demand &amp; merges</h1>
         <p className="mt-1 text-muted">
           Committed baskets waiting to complete a whole bulk unit. Merges also run
           automatically when a basket commits.

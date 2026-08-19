@@ -19,7 +19,7 @@ export default async function ZonesPage() {
         <Link href="/operator" className="text-sm text-muted hover:underline">
           ← Operator
         </Link>
-        <h1 className="mt-2 text-3xl font-bold text-ink">Delivery zones</h1>
+        <h1 className="mt-2 font-display text-[38px] leading-tight text-ink">Delivery zones</h1>
         <p className="mt-1 text-muted">
           Launch one cluster at a time. With no active zones, baskets are open to all
           areas; once you add one, only people inside an active zone can create baskets.

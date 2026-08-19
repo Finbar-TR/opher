@@ -12,7 +12,7 @@ export function LegalPage({
 }) {
   return (
     <article className="mx-auto max-w-2xl">
-      <h1 className="text-3xl font-bold text-ink">{title}</h1>
+      <h1 className="font-display text-[38px] leading-tight text-ink">{title}</h1>
       <p className="mt-1 text-sm text-muted">Last updated: {updated}</p>
       <div className="mt-4 rounded-lg bg-accent-400/15 px-4 py-3 text-sm text-accent-600">
         Template only — review with a qualified UK solicitor before launch.
