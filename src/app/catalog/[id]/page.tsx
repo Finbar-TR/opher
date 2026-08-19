@@ -3,8 +3,7 @@ import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { formatGBP } from "@/lib/money";
 import { getCurrentUser } from "@/lib/auth";
-import { CommodityThumb } from "../page";
-import { SavingsBadge, NoFillNoFee, FillMeter } from "@/components/ui";
+import { PhotoSlot, SavingsBadge, NoFillNoFee } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
 
@@ -23,16 +22,9 @@ export default async function CommodityDetailPage({
 
   const bulkPrice = commodity.pricePerPortion * commodity.portionsPerBulkUnit;
 
-  // Public open baskets for this item that others can join right now — beats
-  // starting a lonely basket and directly fights the "empty app" problem.
   const joinable = user
     ? await prisma.basket.findMany({
-        where: {
-          commodityId: id,
-          status: "open",
-          visibility: "public",
-          orderId: null,
-        },
+        where: { commodityId: id, status: "open", visibility: "public", orderId: null },
         include: { claims: true, organiser: true },
         orderBy: { createdAt: "desc" },
         take: 6,
@@ -41,44 +33,61 @@ export default async function CommodityDetailPage({
 
   return (
     <div className="mx-auto max-w-3xl">
-      <Link href="/catalog" className="text-sm text-muted hover:underline">
+      <Link href="/catalog" className="text-sm font-semibold text-soft hover:underline">
         ← Back to catalog
       </Link>
 
       <div className="mt-4 grid gap-8 sm:grid-cols-2">
-        <CommodityThumb name={commodity.name} imageUrl={commodity.imageUrl} />
+        <div className="space-y-5">
+          <PhotoSlot
+            caption={commodity.name}
+            imageUrl={commodity.imageUrl}
+            className="h-[300px] w-full rounded-3xl"
+          />
+          {/* Bulk maths — roast panel */}
+          <div className="rounded-3xl p-6" style={{ background: "#7c2d12" }}>
+            <p className="eyebrow" style={{ color: "#e0a86a" }}>
+              Bulk maths
+            </p>
+            <p className="mt-2 font-display text-[40px] leading-none text-[#fffaf3]">
+              {formatGBP(bulkPrice)}
+            </p>
+            <p className="mt-2 text-sm text-[#e0a86a]">
+              full {commodity.bulkUnitLabel} · {commodity.portionsPerBulkUnit} portions ·{" "}
+              {formatGBP(commodity.pricePerPortion)} each
+            </p>
+          </div>
+        </div>
+
         <div>
           <div className="flex flex-wrap items-center gap-2">
-            <span className="badge bg-brand-100 text-brand-800">
-              {commodity.category}
-            </span>
+            <span className="badge bg-saffron text-saffron-ink">{commodity.category}</span>
             <SavingsBadge
               pricePerPortion={commodity.pricePerPortion}
               shopPricePerPortion={commodity.shopPricePerPortion}
             />
           </div>
-          <h1 className="mt-2 text-3xl font-bold text-ink">{commodity.name}</h1>
+          <h1 className="mt-2 font-display text-[44px] leading-tight text-ink sm:text-[52px]">
+            {commodity.name}
+          </h1>
           <p className="mt-2 text-muted">{commodity.description}</p>
 
-          <dl className="mt-6 space-y-3 text-sm">
+          <dl className="mt-6 text-sm">
             <Row label="Bulk unit">{commodity.bulkUnitLabel}</Row>
-            <Row label="Portions per bulk unit">
-              {commodity.portionsPerBulkUnit}
-            </Row>
+            <Row label="Portions per bulk unit">{commodity.portionsPerBulkUnit}</Row>
             <Row label="Measured in">{commodity.baseUnit}</Row>
             <Row label="Price per portion">
-              <span className="font-semibold text-brand-700">
+              <span className="font-bold text-tomato">
                 {formatGBP(commodity.pricePerPortion)}
               </span>
             </Row>
             {commodity.shopPricePerPortion != null && (
               <Row label="Typical shop price">
-                <span className="text-muted line-through">
+                <span className="text-soft line-through">
                   {formatGBP(commodity.shopPricePerPortion)}
                 </span>
               </Row>
             )}
-            <Row label="Full bulk unit">{formatGBP(bulkPrice)}</Row>
             <Row label="Delivery">
               ~{commodity.deliveryLeadDays} days after the basket completes
             </Row>
@@ -90,10 +99,7 @@ export default async function CommodityDetailPage({
 
           <div className="mt-6">
             {user ? (
-              <Link
-                href={`/baskets/new?commodityId=${commodity.id}`}
-                className="btn-primary w-full"
-              >
+              <Link href={`/baskets/new?commodityId=${commodity.id}`} className="btn-primary w-full">
                 Start a basket
               </Link>
             ) : (
@@ -106,24 +112,30 @@ export default async function CommodityDetailPage({
       </div>
 
       {joinable.length > 0 && (
-        <div className="mt-10">
-          <h2 className="text-lg font-semibold text-ink">Or join an open basket</h2>
-          <p className="mt-1 text-sm text-muted">
-            These groups are already buying {commodity.name} — hop in.
-          </p>
-          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        <div className="mt-12">
+          <h2 className="font-display text-[28px] text-ink sm:text-[32px]">
+            Or join a basket that&apos;s already filling
+          </h2>
+          <div className="mt-4 grid gap-4 sm:grid-cols-2">
             {joinable.map((b) => {
               const filled = b.claims.reduce((s, c) => s + c.portions, 0);
               return (
-                <Link key={b.id} href={`/baskets/${b.id}`} className="card hover:shadow-md">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="font-semibold text-ink">{b.title}</p>
-                    <span className="text-xs text-muted">by {b.organiser.name}</span>
+                <div key={b.id} className="card">
+                  <p className="text-[17px] font-bold text-ink">{b.title}</p>
+                  <p className="text-sm text-soft">by {b.organiser.name}</p>
+                  <div className="mt-3 flex gap-1.5">
+                    {Array.from({ length: b.targetPortions }).map((_, i) => (
+                      <span
+                        key={i}
+                        className="h-7 w-4 rounded-[3px]"
+                        style={{ background: i < filled ? "#d6432c" : "#eeddcb" }}
+                      />
+                    ))}
                   </div>
-                  <div className="mt-3">
-                    <FillMeter filled={filled} total={b.targetPortions} />
-                  </div>
-                </Link>
+                  <Link href={`/baskets/${b.id}`} className="btn-accent mt-4 w-full">
+                    Join this basket
+                  </Link>
+                </div>
               );
             })}
           </div>
@@ -135,9 +147,9 @@ export default async function CommodityDetailPage({
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-center justify-between border-b border-line pb-3">
-      <dt className="text-muted">{label}</dt>
-      <dd className="font-medium text-ink">{children}</dd>
+    <div className="flex items-center justify-between border-b border-line py-3">
+      <dt className="text-soft">{label}</dt>
+      <dd className="font-semibold text-ink">{children}</dd>
     </div>
   );
 }

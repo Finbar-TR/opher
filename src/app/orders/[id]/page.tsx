@@ -56,36 +56,43 @@ export default async function OrderDetailPage({
           ← Orders
         </Link>
         <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
-          <h1 className="text-3xl font-bold text-ink">{order.commodity.name}</h1>
+          <h1 className="font-display text-[38px] leading-tight text-ink sm:text-[46px]">
+            {order.commodity.name}
+          </h1>
           <OrderStatusBadge status={order.status} />
         </div>
-        <p className="mt-1 text-muted">
+        <p className="mt-1 text-soft">
           {order.bulkUnits} × {order.commodity.bulkUnitLabel} · {totalPortions}{" "}
           portions · {formatGBP(totalAmount)} total
         </p>
         {order.status === "pending_payment" && order.paymentDueAt && (
-          <p className="mt-1 text-sm text-accent-600">
+          <p className="mt-1 text-sm font-semibold text-tomato">
             Pay by {formatDate(order.paymentDueAt)} or the order is cancelled and
             refunded.
           </p>
         )}
         {order.status !== "cancelled" && order.estimatedDeliveryAt && (
-          <p className="mt-1 text-sm text-brand-700">
+          <p className="mt-1 text-sm text-saffron-ink">
             Estimated delivery by {formatDate(order.estimatedDeliveryAt)}.
           </p>
         )}
       </div>
 
       {totalSavings > 0 && (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-accent-400 bg-accent-400/10 px-4 py-3">
-          <p className="text-sm font-semibold text-accent-600">
-            Your group saved {formatGBP(totalSavings)} vs shop prices. 🎉
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-[20px] bg-saffron px-5 py-4">
+          <p className="font-display text-[26px] text-saffron-ink">
+            Your group saved{" "}
+            <span className="font-sans font-extrabold text-tomato">
+              {formatGBP(totalSavings)}
+            </span>{" "}
+            against shop prices.
           </p>
           <a
             href={whatsappUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="btn-primary py-2"
+            className="btn text-[#fffaf3]"
+            style={{ background: "#25a35a" }}
           >
             Share on WhatsApp
           </a>
@@ -93,91 +100,97 @@ export default async function OrderDetailPage({
       )}
 
       {paid && myPayment?.status === "paid" && (
-        <div className="rounded-xl border border-brand-200 bg-brand-50 px-4 py-3 text-sm text-brand-800">
+        <div className="rounded-2xl bg-saffron px-4 py-3 text-sm text-saffron-ink">
           Thanks — your share is paid. You&apos;ll see delivery updates below.
         </div>
       )}
 
-      {/* Your share */}
-      {myPayment && (
-        <div className="card">
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">
-            Your share
-          </h2>
-          <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-            <p className="text-ink">
-              {myPayment.portions} portion(s) ·{" "}
-              <span className="font-semibold">{formatGBP(myPayment.amount)}</span>
-              {myPayment.deliveryFee > 0 ? (
-                <span className="text-xs text-muted">
-                  {" "}
-                  (incl. {formatGBP(myPayment.deliveryFee)} delivery)
-                </span>
-              ) : order.commodity.deliveryFee > 0 ? (
-                <span className="text-xs text-brand-700"> · delivery free (organiser)</span>
-              ) : null}
-            </p>
-            {myPayment.status === "paid" ? (
-              <span className="badge bg-brand-100 text-brand-800">Paid</span>
-            ) : order.status === "pending_payment" ? (
-              <form action={payShareAction}>
-                <input type="hidden" name="paymentId" value={myPayment.id} />
-                <button type="submit" className="btn-primary">
-                  Pay {formatGBP(myPayment.amount)}
-                </button>
-              </form>
-            ) : (
-              <span className="badge bg-line text-muted">Payment closed</span>
+      <div className="grid gap-6 lg:grid-cols-[1fr_1.2fr]">
+        <div className="space-y-6">
+          {/* Your share */}
+          {myPayment && (
+            <div className="card">
+              <h2 className="eyebrow">Your share</h2>
+              <p className="mt-2 font-display text-[42px] leading-none text-ink">
+                {formatGBP(myPayment.amount)}
+              </p>
+              <p className="mt-1 text-sm text-muted">
+                {myPayment.portions} portion(s)
+                {myPayment.deliveryFee > 0
+                  ? ` · incl. ${formatGBP(myPayment.deliveryFee)} delivery`
+                  : order.commodity.deliveryFee > 0
+                    ? " · delivery free (organiser)"
+                    : ""}
+              </p>
+              <div className="mt-4">
+                {myPayment.status === "paid" ? (
+                  <span className="badge bg-saffron text-saffron-ink">Paid</span>
+                ) : order.status === "pending_payment" ? (
+                  <form action={payShareAction}>
+                    <input type="hidden" name="paymentId" value={myPayment.id} />
+                    <button type="submit" className="btn-primary w-full">
+                      Pay {formatGBP(myPayment.amount)}
+                    </button>
+                  </form>
+                ) : (
+                  <span className="badge bg-line-soft text-soft">Payment closed</span>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Participants */}
+          <div className="card">
+            <h2 className="eyebrow">Participants</h2>
+            <table className="mt-3 w-full text-left text-sm">
+              <tbody className="divide-y divide-line-soft">
+                {order.payments.map((p) => (
+                  <tr key={p.id}>
+                    <td className="py-2.5 font-semibold text-ink">
+                      {p.user.name}
+                      {p.userId === user.id && (
+                        <span className="ml-2 text-xs text-soft">(you)</span>
+                      )}
+                    </td>
+                    <td className="py-2.5 text-soft">{p.portions} portion(s)</td>
+                    <td className="py-2.5 text-right">
+                      <span
+                        className={`inline-flex items-center rounded-full px-3 py-1 text-[11px] font-bold ${
+                          p.status === "paid"
+                            ? "bg-saffron text-saffron-ink"
+                            : "bg-tomato text-[#fffaf3]"
+                        }`}
+                      >
+                        {p.status === "paid" ? "Paid" : "Due"}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {!allPaid && order.status === "pending_payment" && (
+              <p className="mt-3 text-xs text-soft">
+                The order is bought once every share is paid.
+              </p>
             )}
           </div>
         </div>
-      )}
 
-      {/* Participants / payment status */}
-      <div className="card">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">
-          Participants
-        </h2>
-        <table className="mt-3 w-full text-left text-sm">
-          <tbody className="divide-y divide-line">
-            {order.payments.map((p) => (
-              <tr key={p.id}>
-                <td className="py-2 text-ink">
-                  {p.user.name}
-                  {p.userId === user.id && (
-                    <span className="ml-2 text-xs text-muted">(you)</span>
-                  )}
-                </td>
-                <td className="py-2 text-muted">{p.portions} portion(s)</td>
-                <td className="py-2 text-right">
-                  <span
-                    className={`badge ${
-                      p.status === "paid"
-                        ? "bg-brand-100 text-brand-800"
-                        : "bg-accent-400/30 text-accent-600"
-                    }`}
-                  >
-                    {p.status === "paid" ? "Paid" : "Due"}
-                  </span>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {!allPaid && order.status === "pending_payment" && (
-          <p className="mt-3 text-xs text-muted">
-            The order is bought once every share is paid.
-          </p>
-        )}
-      </div>
-
-      {/* Delivery tracking */}
-      <div className="card">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">
-          Delivery
-        </h2>
-        <div className="mt-4">
-          <DeliveryTimeline status={order.status} events={order.events} />
+        {/* Delivery — roast panel */}
+        <div className="rounded-3xl p-6" style={{ background: "#7c2d12" }}>
+          <div className="flex items-center justify-between">
+            <span className="eyebrow" style={{ color: "#e0a86a" }}>
+              Delivery
+            </span>
+            {order.estimatedDeliveryAt && (
+              <span className="text-xs text-[#e0a86a]">
+                Est. {formatDate(order.estimatedDeliveryAt)}
+              </span>
+            )}
+          </div>
+          <div className="mt-5">
+            <DeliveryTimeline status={order.status} events={order.events} onDark />
+          </div>
         </div>
       </div>
     </div>

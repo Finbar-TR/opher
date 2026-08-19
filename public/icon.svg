@@ -1,9 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Opher">
-  <rect width="512" height="512" rx="112" fill="#087443"/>
-  <!-- basket -->
-  <path d="M136 224h240l-20 150a40 40 0 0 1-39 34H195a40 40 0 0 1-39-34z" fill="#faf8f3"/>
-  <rect x="120" y="200" width="272" height="34" rx="17" fill="#f59e0b"/>
-  <!-- leaf -->
-  <path d="M256 92c56 24 92 66 92 110 0 8-1 15-3 22-46-6-83-38-98-84a112 112 0 0 1 9-48z" fill="#6ce9a6"/>
-  <path d="M256 92c-56 24-92 66-92 110 0 8 1 15 3 22 46-6 83-38 98-84a112 112 0 0 0-9-48z" fill="#32d583"/>
+  <rect width="512" height="512" rx="112" fill="#fffaf3"></rect>
+  <g transform="rotate(-90 256 256)" fill="none" stroke-width="71.68">
+    <circle cx="256" cy="256" r="184.32" stroke="#dcc3ab" stroke-dasharray="184.32 47.32" stroke-dashoffset="23.66"></circle>
+    <circle cx="256" cy="256" r="184.32" stroke="#d6432c" stroke-dasharray="184.32 1157.94" stroke-dashoffset="23.66"></circle>
+    <circle cx="256" cy="256" r="184.32" stroke="#d6432c" stroke-dasharray="184.32 1157.94" stroke-dashoffset="-207.97"></circle>
+  </g>
 </svg>

@@ -5,12 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { formatGBP, savings } from "@/lib/money";
 import { formatDate } from "@/lib/dates";
 import { requestBaseUrl } from "@/lib/base-url";
-import {
-  FillMeter,
-  BasketStatusBadge,
-  SavingsBadge,
-  NoFillNoFee,
-} from "@/components/ui";
+import { BasketStatusBadge, ProgressBar, NoFillNoFee } from "@/components/ui";
 import { CopyButton } from "@/components/copy-button";
 import { ClaimForm } from "./claim-form";
 import {
@@ -47,11 +42,10 @@ export default async function BasketPage({
   const isOrganiser = basket.organiserId === user.id;
   const price = basket.commodity.pricePerPortion;
   const totalOwed = filled * price;
+  const isOpen = basket.status === "open";
 
   const appUrl = await requestBaseUrl();
   const inviteUrl = `${appUrl}/join/${basket.inviteCode}`;
-  const isOpen = basket.status === "open";
-
   const s = savings(price, basket.commodity.shopPricePerPortion);
   const basketSavings = s ? s.perPortion * filled : 0;
   const deliveryFee = basket.commodity.deliveryFee;
@@ -61,231 +55,225 @@ export default async function BasketPage({
   const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(shareText)}`;
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
-      <div>
-        <Link href="/baskets" className="text-sm text-muted hover:underline">
-          ← My baskets
-        </Link>
-        <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
-          <h1 className="text-3xl font-bold text-ink">{basket.title}</h1>
-          <BasketStatusBadge status={basket.status} />
+    <div className="mx-auto max-w-4xl space-y-6">
+      <Link href="/baskets" className="text-sm font-semibold text-soft hover:underline">
+        ← My baskets
+      </Link>
+
+      {/* Roast hero */}
+      <div className="grid gap-6 rounded-3xl p-7 sm:grid-cols-[1.2fr_300px]" style={{ background: "#7c2d12" }}>
+        <div>
+          <div className="flex flex-wrap items-center gap-3">
+            <BasketStatusBadge status={basket.status} />
+            {(basket.status === "open" || basket.status === "committed") &&
+              basket.expiresAt && (
+                <span className="text-xs text-[#e0a86a]">
+                  Closes {formatDate(basket.expiresAt)} if it hasn&apos;t merged
+                </span>
+              )}
+          </div>
+          <h1 className="mt-3 font-display text-[40px] leading-tight text-[#fffaf3] sm:text-[46px]">
+            {basket.title}
+          </h1>
+          <p className="mt-1 text-sm text-[#e0a86a]">
+            <Link href={`/catalog/${basket.commodityId}`} className="hover:underline">
+              {basket.commodity.name}
+            </Link>{" "}
+            · {basket.commodity.bulkUnitLabel} · {formatGBP(price)} / portion
+          </p>
         </div>
-        <p className="mt-1 text-muted">
-          <Link
-            href={`/catalog/${basket.commodityId}`}
-            className="text-brand-700 hover:underline"
-          >
-            {basket.commodity.name}
-          </Link>{" "}
-          · {basket.commodity.bulkUnitLabel} · {formatGBP(price)} / portion
-        </p>
-        <div className="mt-2">
-          <SavingsBadge
-            pricePerPortion={price}
-            shopPricePerPortion={basket.commodity.shopPricePerPortion}
-          />
+        <div className="flex flex-col justify-center">
+          <div className="flex items-baseline justify-between text-[#fffaf3]">
+            <span className="text-sm font-bold">
+              {filled} of {basket.targetPortions} portions
+            </span>
+            <span className="text-sm font-bold">{formatGBP(totalOwed)} pledged</span>
+          </div>
+          <div className="mt-2">
+            <ProgressBar filled={filled} total={basket.targetPortions} dark className="h-4" />
+          </div>
+          {isOpen && remaining > 0 && (
+            <p className="mt-3 text-[15px] font-extrabold text-[#fffaf3]">
+              {remaining === 1
+                ? "Just 1 portion left to complete this basket!"
+                : `${remaining} portions still available.`}
+            </p>
+          )}
+          <p className="mt-1 text-sm text-[#e0a86a]">
+            Delivery about {basket.commodity.deliveryLeadDays} days after it completes.
+          </p>
+          {basketSavings > 0 && (
+            <p className="mt-1 text-sm font-bold" style={{ color: "#f0844c" }}>
+              Saves {formatGBP(basketSavings)} vs shop so far.
+            </p>
+          )}
         </div>
       </div>
 
       {basket.orderId && (
-        <div className="rounded-xl border border-brand-200 bg-brand-50 px-4 py-3 text-sm text-brand-800">
+        <div className="rounded-2xl border border-line bg-saffron px-4 py-3 text-sm text-saffron-ink">
           This basket has been merged into an order.{" "}
-          <Link href={`/orders/${basket.orderId}`} className="font-semibold underline">
-            View order & delivery →
+          <Link href={`/orders/${basket.orderId}`} className="font-bold underline">
+            View order &amp; delivery →
           </Link>
         </div>
       )}
 
-      <div className="card">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">
-          Progress
-        </h2>
-        <div className="mt-3">
-          <FillMeter filled={filled} total={basket.targetPortions} />
-        </div>
-        {isOpen && remaining > 0 && (
-          <p
-            className={`mt-3 text-sm ${
-              remaining === 1 ? "font-semibold text-accent-600" : "text-muted"
-            }`}
-          >
-            {remaining === 1
-              ? "Just 1 portion left to complete this basket!"
-              : `${remaining} portions still available.`}
-          </p>
-        )}
-        {(basket.status === "open" || basket.status === "committed") &&
-          basket.expiresAt && (
-            <p className="mt-1 text-sm text-muted">
-              Closes {formatDate(basket.expiresAt)} if it hasn&apos;t merged.
-            </p>
-          )}
-        <p className="mt-1 text-sm text-muted">
-          Delivery about {basket.commodity.deliveryLeadDays} days after it completes.
-        </p>
-        {basketSavings > 0 && (
-          <p className="mt-1 text-sm font-medium text-accent-600">
-            This basket saves {formatGBP(basketSavings)} vs shop prices so far.
-          </p>
-        )}
-        {isOpen && (
-          <div className="mt-4">
-            <NoFillNoFee />
-          </div>
-        )}
-      </div>
-
-      {/* Shared ledger */}
-      <div className="card">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-muted">
-          Members &amp; shares
-        </h2>
-        <table className="mt-3 w-full text-left text-sm">
-          <thead className="text-muted">
-            <tr>
-              <th className="pb-2 font-medium">Member</th>
-              <th className="pb-2 font-medium">Portions</th>
-              <th className="pb-2 text-right font-medium">Owes</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-line">
-            {basket.claims.map((c) => (
-              <tr key={c.id}>
-                <td className="py-2 text-ink">
-                  {c.user.name}
-                  {c.userId === basket.organiserId && (
-                    <span className="ml-2 text-xs text-accent-600">organiser</span>
-                  )}
-                  {c.userId === user.id && (
-                    <span className="ml-2 text-xs text-muted">(you)</span>
-                  )}
-                </td>
-                <td className="py-2 text-muted">{c.portions}</td>
-                <td className="py-2 text-right font-medium text-ink">
-                  {formatGBP(c.portions * price)}
-                </td>
-                {isOrganiser && isOpen && (
-                  <td className="py-2 pl-3 text-right">
-                    {c.userId !== basket.organiserId && (
-                      <form action={removeMemberAction}>
-                        <input type="hidden" name="basketId" value={basket.id} />
-                        <input type="hidden" name="userId" value={c.userId} />
-                        <button
-                          type="submit"
-                          className="text-xs font-medium text-red-600 hover:underline"
-                        >
-                          Remove
-                        </button>
-                      </form>
+      <div className="grid gap-6 lg:grid-cols-[1.3fr_1fr]">
+        {/* Ledger */}
+        <div className="card">
+          <h2 className="eyebrow">Members &amp; shares</h2>
+          <table className="mt-3 w-full text-left text-sm">
+            <tbody className="divide-y divide-line-soft">
+              {basket.claims.map((c) => (
+                <tr key={c.id}>
+                  <td className="py-3.5 font-semibold text-ink">
+                    {c.user.name}
+                    {c.userId === basket.organiserId && (
+                      <span className="ml-2 text-[11px] font-bold text-tomato">ORGANISER</span>
+                    )}
+                    {c.userId === user.id && (
+                      <span className="ml-2 text-xs text-soft">(you)</span>
                     )}
                   </td>
-                )}
+                  <td className="py-3.5 text-soft">{c.portions}</td>
+                  <td className="py-3.5 text-right font-semibold text-ink">
+                    {formatGBP(c.portions * price)}
+                  </td>
+                  {isOrganiser && isOpen && (
+                    <td className="py-3.5 pl-3 text-right">
+                      {c.userId !== basket.organiserId && (
+                        <form action={removeMemberAction}>
+                          <input type="hidden" name="basketId" value={basket.id} />
+                          <input type="hidden" name="userId" value={c.userId} />
+                          <button type="submit" className="text-xs font-bold text-tomato-press hover:underline">
+                            Remove
+                          </button>
+                        </form>
+                      )}
+                    </td>
+                  )}
+                </tr>
+              ))}
+              {isOpen && remaining > 0 && (
+                <tr className="text-soft">
+                  <td className="py-3.5 italic">{remaining} portion(s) unclaimed</td>
+                  <td className="py-3.5">{remaining}</td>
+                  <td className="py-3.5 text-right">{formatGBP(remaining * price)}</td>
+                  {isOrganiser && <td />}
+                </tr>
+              )}
+            </tbody>
+            <tfoot>
+              <tr className="border-t-2 border-line">
+                <td className="pt-3 font-bold text-ink">Total</td>
+                <td className="pt-3 font-bold text-ink">{filled}</td>
+                <td className="pt-3 text-right font-bold text-tomato">{formatGBP(totalOwed)}</td>
+                {isOrganiser && isOpen && <td />}
               </tr>
-            ))}
-          </tbody>
-          <tfoot>
-            <tr className="border-t-2 border-line">
-              <td className="pt-2 font-semibold text-ink">Total</td>
-              <td className="pt-2 font-semibold text-ink">{filled}</td>
-              <td className="pt-2 text-right font-semibold text-ink">
-                {formatGBP(totalOwed)}
-              </td>
-            </tr>
-          </tfoot>
-        </table>
-      </div>
+            </tfoot>
+          </table>
 
-      {/* Actions while open */}
-      {isOpen && (
-        <div className="card space-y-5">
-          <ClaimForm
-            basketId={basket.id}
-            remaining={remaining}
-            currentPortions={myClaim?.portions ?? 0}
-          />
+          {isOpen && (
+            <div className="mt-5 border-t border-line-soft pt-5">
+              <ClaimForm
+                basketId={basket.id}
+                remaining={remaining}
+                currentPortions={myClaim?.portions ?? 0}
+                pricePerPortion={price}
+              />
+            </div>
+          )}
+        </div>
 
-          <div className="border-t border-line pt-5">
-            <p className="label">Invite your group</p>
-            <div className="flex flex-wrap items-center gap-3">
-              <code className="rounded-lg bg-brand-50 px-3 py-2 text-sm font-semibold text-brand-800">
-                {basket.inviteCode}
-              </code>
-              <CopyButton value={inviteUrl} />
+        {/* Right column */}
+        <div className="space-y-6">
+          {isOpen && (
+            <div className="card">
+              <p className="label">Invite your group</p>
+              <div className="flex items-center justify-between gap-2 rounded-[14px] bg-saffron px-4 py-3">
+                <code className="font-mono text-lg font-semibold tracking-[0.12em] text-saffron-ink">
+                  {basket.inviteCode}
+                </code>
+                <CopyButton value={inviteUrl} label="Copy link" />
+              </div>
               <a
                 href={whatsappUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="btn-primary py-2"
+                className="btn mt-3 w-full text-[#fffaf3]"
+                style={{ background: "#25a35a" }}
               >
                 Share on WhatsApp
               </a>
-            </div>
-            <p className="mt-2 text-xs text-muted">
-              {deliveryFee > 0
-                ? `Delivery is ${formatGBP(deliveryFee)} per person — free for you as the organiser.`
-                : "Anyone with the link can join and claim portions."}
-            </p>
-          </div>
-
-          <div className="flex flex-wrap gap-3 border-t border-line pt-5">
-            {isOrganiser && (
-              <>
-                <form action={commitBasketAction}>
-                  <input type="hidden" name="basketId" value={basket.id} />
-                  <button type="submit" className="btn-accent" disabled={filled < 1}>
-                    Commit basket to buy
-                  </button>
-                </form>
-                <form action={cancelBasketAction}>
-                  <input type="hidden" name="basketId" value={basket.id} />
-                  <button type="submit" className="btn-danger">
-                    Cancel basket
-                  </button>
-                </form>
-              </>
-            )}
-            {!isOrganiser && myClaim && (
-              <form action={leaveBasketAction}>
-                <input type="hidden" name="basketId" value={basket.id} />
-                <button type="submit" className="btn-danger">
-                  Leave basket
-                </button>
-              </form>
-            )}
-          </div>
-          {isOrganiser && (
-            <p className="text-xs text-muted">
-              Committing locks the basket and looks for complementary baskets to
-              complete a whole {basket.commodity.bulkUnitLabel}.
-            </p>
-          )}
-        </div>
-      )}
-
-      {basket.status === "committed" && !basket.orderId && (
-        <div className="card space-y-4">
-          <p className="text-sm text-muted">
-            Committed — waiting to merge with other baskets into a whole{" "}
-            {basket.commodity.bulkUnitLabel}.
-          </p>
-          {isOrganiser && (
-            <div className="flex flex-wrap gap-3">
-              <form action={uncommitBasketAction}>
-                <input type="hidden" name="basketId" value={basket.id} />
-                <button type="submit" className="btn-secondary">
-                  Re-open basket
-                </button>
-              </form>
-              <form action={cancelBasketAction}>
-                <input type="hidden" name="basketId" value={basket.id} />
-                <button type="submit" className="btn-danger">
-                  Cancel basket
-                </button>
-              </form>
+              <p className="mt-2 text-xs text-soft">
+                {deliveryFee > 0
+                  ? `Delivery is ${formatGBP(deliveryFee)} per person — free for you as the organiser.`
+                  : "Anyone with the link can join and claim portions."}
+              </p>
             </div>
           )}
+
+          {isOpen && (
+            <div className="card space-y-4">
+              <NoFillNoFee />
+              {isOrganiser && (
+                <>
+                  <form action={commitBasketAction}>
+                    <input type="hidden" name="basketId" value={basket.id} />
+                    <button type="submit" className="btn-primary w-full" disabled={filled < 1}>
+                      Commit basket to buy
+                    </button>
+                  </form>
+                  <p className="text-xs text-soft">
+                    Committing locks the basket and looks for complementary baskets to
+                    complete a whole {basket.commodity.bulkUnitLabel}.
+                  </p>
+                  <form action={cancelBasketAction}>
+                    <input type="hidden" name="basketId" value={basket.id} />
+                    <button type="submit" className="btn-danger w-full">
+                      Cancel basket
+                    </button>
+                  </form>
+                </>
+              )}
+              {!isOrganiser && myClaim && (
+                <form action={leaveBasketAction}>
+                  <input type="hidden" name="basketId" value={basket.id} />
+                  <button type="submit" className="btn-danger w-full">
+                    Leave basket
+                  </button>
+                </form>
+              )}
+            </div>
+          )}
+
+          {basket.status === "committed" && !basket.orderId && (
+            <div className="card space-y-4">
+              <p className="text-sm text-muted">
+                Committed — waiting to merge with other baskets into a whole{" "}
+                {basket.commodity.bulkUnitLabel}.
+              </p>
+              {isOrganiser && (
+                <div className="flex flex-wrap gap-3">
+                  <form action={uncommitBasketAction}>
+                    <input type="hidden" name="basketId" value={basket.id} />
+                    <button type="submit" className="btn-secondary">
+                      Re-open basket
+                    </button>
+                  </form>
+                  <form action={cancelBasketAction}>
+                    <input type="hidden" name="basketId" value={basket.id} />
+                    <button type="submit" className="btn-danger">
+                      Cancel basket
+                    </button>
+                  </form>
+                </div>
+              )}
+            </div>
+          )}
         </div>
-      )}
+      </div>
     </div>
   );
 }
