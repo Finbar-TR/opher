@@ -15,29 +15,6 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// A person with an account. `role` is "member" or "operator" (see constants.ts).
-model User {
-  id            String   @id @default(cuid())
-  email         String   @unique
-  name          String
-  passwordHash  String
-  role          String   @default("member")
-  emailVerified Boolean  @default(false)
-  createdAt     DateTime @default(now())
-
-  // Delivery address (required before claiming a portion, so every order is shippable).
-  addrLine1 String?
-  addrLine2 String?
-  addrCity  String?
-  postcode  String?
-  phone     String?
-
-  baskets       Basket[]            @relation("BasketOrganiser")
-  portionClaims PortionClaim[]
-  payments      Payment[]
-  tokens        VerificationToken[]
-}
-
 // One-time tokens for password reset and email verification (token stored hashed).
 model VerificationToken {
   id        String   @id @default(cuid())
@@ -51,120 +28,204 @@ model VerificationToken {
   user User @relation(fields: [userId], references: [id])
 }
 
-// Operator-curated item. A bulk unit (e.g. "25kg sack") is divided into
-// `portionsPerBulkUnit` portions; members buy portions. Money stored in pence.
-// Product-agnostic: `category` lets the same engine carry non-food later.
-model Commodity {
-  id                  String   @id @default(cuid())
-  name                String
-  description         String   @default("")
-  imageUrl            String?
-  category            String   @default("Food") // operator-defined grouping
-  baseUnit            String // e.g. "kg"
-  bulkUnitLabel       String // e.g. "25kg sack"
-  portionsPerBulkUnit Int
-  pricePerPortion     Int // pence
-  shopPricePerPortion Int? // typical shop price per portion, for "you save £X"
-  deliveryFee         Int      @default(0) // pence per participant per order
-  deliveryLeadDays    Int      @default(7) // days from order completion to delivery
-  active              Boolean  @default(true)
-  createdAt           DateTime @default(now())
+// A person with an account. `role` is "member" or "operator" (see constants.ts).
+// An operator is the AdminUser of the handoff documents — there is no separate
+// admin auth system.
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  name          String
+  passwordHash  String
+  role          String   @default("member")
+  emailVerified Boolean  @default(false)
+  createdAt     DateTime @default(now())
+
+  // Delivery address (required before joining, so every order is shippable).
+  addrLine1 String?
+  addrLine2 String?
+  addrCity  String?
+  postcode  String?
+  phone     String?
+
+  // Stripe Customer, created on first join and reused for later ones.
+  stripeCustomerId String?
+
+  orders         Order[]
+  createdBaskets Basket[]            @relation("BasketCreator")
+  tokens         VerificationToken[]
+}
+
+// A city we deliver to. The city — not the basket — owns the delivery schedule:
+// every basket in the city shares its dates, so one run per cycle carries all
+// foods. Delivery dates are `anchorDate + n * cadenceDays`.
+model City {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  slug        String   @unique
+  active      Boolean  @default(true)
+  cadenceDays Int      @default(14) // fortnightly
+  anchorDate  DateTime // any past or future delivery date; the series derives from it
+  cutoffDays  Int      @default(3) // joins close this many days before delivery
+  createdAt   DateTime @default(now())
 
   baskets Basket[]
-  orders  Order[]
+  windows DeliveryWindow[]
 }
 
-// A delivery area, defined by covered outward postcode codes (e.g. "M14,M16").
-// Only baskets in an active zone can be created — the one-cluster launch gate.
-model DeliveryZone {
-  id           String   @id @default(cuid())
-  name         String
-  outwardCodes String // comma-separated outward codes, uppercased
-  active       Boolean  @default(true)
-  createdAt    DateTime @default(now())
+// Top-level product. `category` is "dry" or "fresh": only dry goods can be
+// pre-bought and held at the 3PL (see the spec's supply model).
+model Product {
+  id          String   @id @default(cuid())
+  name        String
+  description String   @default("")
+  imageUrl    String?
+  category    String   @default("dry")
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  skus Sku[]
 }
 
-// Demand captured from people outside any live zone — signals where to expand.
-model Waitlist {
-  id        String   @id @default(cuid())
-  email     String
-  postcode  String
-  createdAt DateTime @default(now())
+// A purchasable variant, supply-side only — customers buy BasketTiers, not SKUs,
+// so there is no customer-facing price here. Weights and stock are in GRAMS.
+model Sku {
+  id                     String   @id @default(cuid())
+  productId              String
+  label                  String
+  weightGrams            Int // the bulk unit we buy from the supplier
+  wholesaleCostPence     Int // cost of one bulk unit
+  purchaseThresholdGrams Int // demand needed before we buy
+  leadTimeDays           Int      @default(2) // PO raised -> goods at the 3PL
+  stockAt3pl             Int      @default(0) // grams currently held
+  reorderPoint           Int      @default(0) // grams
+  active                 Boolean  @default(true)
+  createdAt              DateTime @default(now())
+
+  product        Product         @relation(fields: [productId], references: [id])
+  baskets        Basket[]
+  purchaseOrders PurchaseOrder[]
 }
 
-// A group buy for one commodity, opened by an organiser. Fills as members claim
-// portions. `targetPortions` is 1..portionsPerBulkUnit (validated in app code).
+// A platform-scheduled basket: one food, in one city, recurring on that city's
+// schedule. Never created by users. Carries no dates of its own.
 model Basket {
+  id          String   @id @default(cuid())
+  cityId      String
+  skuId       String
+  label       String
+  status      String   @default("open") // open|paused|archived
+  minJoiners  Int      @default(0) // soft marketing floor; gates nothing
+  createdById String
+  createdAt   DateTime @default(now())
+
+  city      City             @relation(fields: [cityId], references: [id])
+  sku       Sku              @relation(fields: [skuId], references: [id])
+  createdBy User             @relation("BasketCreator", fields: [createdById], references: [id])
+  tiers     BasketTier[]
+  orders    Order[]
+  snapshots DemandSnapshot[]
+}
+
+// A quantity option within a basket, e.g. "Medium (5 kg)" at £22. This is the
+// unit of sale. Price per kg is computed for display, never stored.
+model BasketTier {
+  id           String  @id @default(cuid())
+  basketId     String
+  label        String
+  weightGrams  Int
+  pricePence   Int
+  active       Boolean @default(true)
+  displayOrder Int     @default(1)
+
+  basket Basket  @relation(fields: [basketId], references: [id])
+  orders Order[]
+}
+
+// One delivery date for one city. `cutoffAt` is 08:00 UTC on
+// deliveryDate - city.cutoffDays: the moment joins close AND cards are charged.
+model DeliveryWindow {
+  id           String   @id @default(cuid())
+  cityId       String
+  deliveryDate DateTime
+  cutoffAt     DateTime
+  status       String   @default("open") // open|locked|dispatched|cancelled
+  notes        String   @default("")
+  createdAt    DateTime @default(now())
+
+  city           City             @relation(fields: [cityId], references: [id])
+  orders         Order[]
+  snapshots      DemandSnapshot[]
+  purchaseOrders PurchaseOrder[]
+
+  @@unique([cityId, deliveryDate])
+}
+
+// The cutoff decision for one basket in one window. Running demand totals are
+// computed from orders, not stored here — only the outcome, which cannot be
+// recomputed once orders have been cancelled.
+model DemandSnapshot {
+  id                      String    @id @default(cuid())
+  basketId                String
+  windowId                String
+  outcome                 String    @default("pending") // pending|confirmed|failed
+  decidedAt               DateTime?
+  demandedGramsAtDecision Int?
+
+  basket Basket         @relation(fields: [basketId], references: [id])
+  window DeliveryWindow @relation(fields: [windowId], references: [id])
+
+  @@unique([basketId, windowId])
+}
+
+// Our order to the supplier. `windowId` is null on a replenishment PO — stock
+// bought ahead of demand rather than against a specific cycle.
+model PurchaseOrder {
   id             String   @id @default(cuid())
-  commodityId    String
-  organiserId    String
-  title          String
-  targetPortions Int
-  status         String   @default("open") // open|committed|ordered|fulfilled|cancelled
-  visibility     String   @default("private") // private (invite-only) | public (discoverable)
-  allowMerge     Boolean  @default(true) // may combine with nearby baskets to fill a unit
-  outwardCode    String? // delivery zone, derived from organiser's postcode
-  inviteCode     String   @unique
-  orderId        String?
-  expiresAt      DateTime? // auto-cancelled after this if still open/committed
+  skuId          String
+  windowId       String?
+  quantityGrams  Int
+  totalCostPence Int
+  status         String   @default("pending") // pending|sent|confirmed|received_at_3pl|failed
+  importerRef    String?
   createdAt      DateTime @default(now())
 
-  commodity Commodity      @relation(fields: [commodityId], references: [id])
-  organiser User           @relation("BasketOrganiser", fields: [organiserId], references: [id])
-  claims    PortionClaim[]
-  order     Order?         @relation(fields: [orderId], references: [id])
+  sku    Sku             @relation(fields: [skuId], references: [id])
+  window DeliveryWindow? @relation(fields: [windowId], references: [id])
 }
 
-// A member's claim of some portions within a basket (joining == claiming).
-model PortionClaim {
-  id        String   @id @default(cuid())
-  basketId  String
-  userId    String
-  portions  Int
-  createdAt DateTime @default(now())
-
-  basket Basket @relation(fields: [basketId], references: [id])
-  user   User   @relation(fields: [userId], references: [id])
-
-  @@unique([basketId, userId])
-}
-
-// One or more whole bulk units purchased, formed from one basket or a merge of
-// complementary committed baskets. Advances through fulfilment states.
+// One user's join to one basket tier for one delivery window. Carries all
+// payment state: the card is saved at join and charged at the window's cutoff.
 model Order {
-  id          String   @id @default(cuid())
-  commodityId       String
-  bulkUnits         Int       @default(1)
-  status            String    @default("pending_payment") // pending_payment|paid|bought|out_for_delivery|delivered|cancelled
-  outwardCode       String? // delivery zone of the merged baskets
-  paymentDueAt      DateTime? // pending_payment orders auto-cancel + refund after this
-  estimatedDeliveryAt DateTime? // projected delivery date, set at order creation
-  createdAt         DateTime  @default(now())
-
-  commodity Commodity       @relation(fields: [commodityId], references: [id])
-  baskets   Basket[]
-  payments  Payment[]
-  events    DeliveryEvent[]
-}
-
-// A single participant's charge for their portion share (collect-on-order).
-model Payment {
-  id                    String   @id @default(cuid())
-  orderId               String
+  id                    String    @id @default(cuid())
   userId                String
-  portions              Int
-  amount                Int // pence — portions*pricePerPortion + deliveryFee
-  deliveryFee           Int      @default(0) // pence (waived to 0 for the organiser)
-  status                String   @default("unpaid") // unpaid|paid|refunded
-  stripeSessionId       String?
-  stripePaymentIntentId String? // captured on payment, used for refunds
-  deliveryAddress       String? // snapshot of the member's address at order time
-  createdAt             DateTime @default(now())
+  basketId              String
+  basketTierId          String
+  deliveryWindowId      String
+  status                String    @default("committed")
+  stripeCustomerId      String?
+  stripeSetupIntentId   String?   @unique
+  stripePaymentMethodId String?
+  stripePaymentIntentId String?
+  debitDate             DateTime // = window.cutoffAt
+  cancellationDeadline  DateTime // = window.cutoffAt
+  paymentAttemptedAt    DateTime?
+  paymentRetryCount     Int       @default(0)
+  totalPence            Int // snapshot of tier.pricePence at join
+  deliveryAddress       String // snapshot of the member's address at join
+  utmSource             String?
+  utmMedium             String?
+  utmCampaign           String?
+  referrerOrderId       String? // schema-ready; unused this milestone
+  createdAt             DateTime  @default(now())
 
-  order Order @relation(fields: [orderId], references: [id])
-  user  User  @relation(fields: [userId], references: [id])
+  user   User            @relation(fields: [userId], references: [id])
+  basket Basket          @relation(fields: [basketId], references: [id])
+  tier   BasketTier      @relation(fields: [basketTierId], references: [id])
+  window DeliveryWindow  @relation(fields: [deliveryWindowId], references: [id])
+  events DeliveryEvent[]
 
-  @@unique([orderId, userId])
+  // One join per person per basket per cycle. To take more, pick a larger tier.
+  @@unique([userId, basketId, deliveryWindowId])
 }
 
 // Operator-driven delivery status update, shown to members as a timeline.
@@ -176,4 +237,13 @@ model DeliveryEvent {
   createdAt DateTime @default(now())
 
   order Order @relation(fields: [orderId], references: [id])
+}
+
+// Demand captured from people outside any live city — signals where to expand.
+model Waitlist {
+  id        String   @id @default(cuid())
+  email     String
+  postcode  String
+  city      String? // the city they were looking at, if any
+  createdAt DateTime @default(now())
 }
