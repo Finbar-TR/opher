@@ -2,8 +2,9 @@ import { describe, it, expect, afterAll, vi } from "vitest";
 import { prisma } from "./prisma";
 import { runCycles } from "./cycle-run";
 import { cutoffAtFor } from "./cycles";
-import { chargeOrder } from "./payments";
+import { chargeOrder, findIntentsForAttempt } from "./payments";
 import type { ChargeOutcome } from "./payments";
+import { MAX_PAYMENT_ATTEMPTS } from "./constants";
 
 vi.mock("./stripe", () => ({ stripe: null, stripeConfigured: () => false }));
 
@@ -11,9 +12,15 @@ vi.mock("./stripe", () => ({ stripe: null, stripeConfigured: () => false }));
 // ./stripe is mocked to null above) in a spy so individual tests can force a
 // decline or a thrown error with mockImplementationOnce, while every other
 // call keeps behaving exactly like production without a Stripe key.
+// `findIntentsForAttempt` is wrapped the same way so a test can make the
+// reconciler fail to establish an outcome for one specific order.
 vi.mock("./payments", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./payments")>();
-  return { ...actual, chargeOrder: vi.fn(actual.chargeOrder) };
+  return {
+    ...actual,
+    chargeOrder: vi.fn(actual.chargeOrder),
+    findIntentsForAttempt: vi.fn(actual.findIntentsForAttempt),
+  };
 });
 
 // `runCycles` sweeps the whole shared dev.db, so a run started by one test can
@@ -33,6 +40,22 @@ function forceOutcomeFor(orderId: string, outcome: ChargeOutcome | (() => never)
 }
 
 const restoreChargeOrder = () => vi.mocked(chargeOrder).mockImplementation(realChargeOrder);
+
+const realFindIntents = (await vi.importActual<typeof import("./payments")>("./payments"))
+  .findIntentsForAttempt;
+
+// Same shape as forceOutcomeFor: make the reconciler's Stripe lookup fail for
+// ONE order, so every other fixture in the shared dev.db still reconciles
+// normally.
+function failReconcileFor(orderId: string) {
+  vi.mocked(findIntentsForAttempt).mockImplementation(async (params) => {
+    if (params.orderId !== orderId) return realFindIntents(params);
+    throw new Error("simulated Stripe lookup failure");
+  });
+}
+
+const restoreFindIntents = () =>
+  vi.mocked(findIntentsForAttempt).mockImplementation(realFindIntents);
 
 const TAG = "ZZTEST_CRON_" + Date.now();
 const DELIVERY = new Date("2026-11-21T00:00:00Z");
@@ -226,6 +249,60 @@ describe("runCycles payment retries", () => {
 
     const after = await prisma.order.findUniqueOrThrow({ where: { id: order.id } });
     expect(after.status).toBe("cancelled");
+  });
+
+  // The race this guards: order O sits at the attempt cap with its last
+  // attempt still `pending`. Phase 0 tries to settle it against Stripe and
+  // cannot (the lookup throws), so the attempt stays pending — a charge may
+  // stand against the card. Phase 3 then reads O, sees the cap, and used to
+  // cancel it unconditionally. A `payment_intent.succeeded` arriving after
+  // that finds the order no longer `payment_pending` and can only log: the
+  // customer is charged, the order says cancelled, and nothing refunds it.
+  it("does not cancel a capped order that still has an unsettled attempt", async () => {
+    const { basketId } = await scenario({ tierGrams: 10000, joiners: 1 });
+    const order = await prisma.order.findFirstOrThrow({ where: { basketId } });
+
+    // At the cap on ATTEMPTS but not on retries — none of these attempts ever
+    // produced a confirmed failure, which is exactly the shape the attempt cap
+    // exists to release. The last one is still pending.
+    await prisma.order.update({
+      where: { id: order.id },
+      data: {
+        status: "payment_pending",
+        paymentRetryCount: 0,
+        paymentAttemptedAt: new Date("2026-11-18T07:00:00Z"),
+      },
+    });
+    for (let n = 0; n < MAX_PAYMENT_ATTEMPTS; n++) {
+      const last = n === MAX_PAYMENT_ATTEMPTS - 1;
+      await prisma.paymentAttempt.create({
+        data: {
+          orderId: order.id,
+          attemptNumber: n,
+          idempotencyKey: `order-${order.id}-attempt-${n}`,
+          status: last ? "pending" : "abandoned",
+          resolvedAt: last ? null : new Date("2026-11-18T07:00:00Z"),
+        },
+      });
+    }
+
+    failReconcileFor(order.id);
+    let result;
+    try {
+      result = await runCycles(AT_CUTOFF);
+    } finally {
+      restoreFindIntents();
+    }
+
+    // Both refusals to guess are counted: phase 0's, and phase 3's.
+    expect(result.needsManualReview).toBeGreaterThanOrEqual(2);
+
+    const after = await prisma.order.findUniqueOrThrow({ where: { id: order.id } });
+    expect(after.status).toBe("payment_pending");
+
+    // And the evidence a human needs is still there, unresolved.
+    const attempts = await prisma.paymentAttempt.findMany({ where: { orderId: order.id } });
+    expect(attempts.filter((a) => a.status === "pending")).toHaveLength(1);
   });
 
   it("retries a declined charge on a later run and it succeeds (I2)", async () => {

@@ -120,11 +120,30 @@ export async function cancelOrder(
 
   const paymentMethodId = order.stripePaymentMethodId;
 
-  await prisma.order.update({
-    where: { id: orderId },
+  // The checks above are reads, and the cutoff cron can claim this order in the
+  // gap between them and this write — at 07:59:59.9 on cutoff day it does
+  // exactly that, moving the order `committed -> payment_pending` and calling
+  // Stripe. A plain `update` here would then overwrite a live claim: the charge
+  // succeeds, `resolveChargeOutcome` finds the order no longer
+  // `payment_pending` and can only log, and the customer is charged for an
+  // order that says cancelled. Repeating the guard as the write's own filter
+  // makes the claim and the cancellation compete for one row, and exactly one
+  // of them wins.
+  const cancelled = await prisma.order.updateMany({
+    where: { id: orderId, status: "committed", paymentAttemptedAt: null },
     data: { status: "cancelled", stripePaymentMethodId: null },
   });
+  if (cancelled.count === 0) {
+    // Same message as the guard above: from the customer's side this is the
+    // same fact — the charge run got there first.
+    throw new Error("This order cannot be cancelled.");
+  }
 
+  // Reached only when the conditional write above actually won the row, which
+  // is what keeps the card attached while a charge may be in flight: losing
+  // the race throws before this point rather than detaching a payment method
+  // Stripe is being asked to charge right now.
+  //
   // Detach only when nothing else still needs this card: a user with two
   // committed joins shares one saved card, and detaching unconditionally would
   // silently break the charge for the other one.

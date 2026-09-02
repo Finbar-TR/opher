@@ -2,8 +2,17 @@ import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { prisma } from "./prisma";
 import { joinBasket, cancelOrder, reconcileSetupIntent } from "./joins";
 import { cutoffAtFor } from "./cycles";
+import { detachPaymentMethod } from "./payments";
 
 vi.mock("./stripe", () => ({ stripe: null, stripeConfigured: () => false }));
+
+// Wrapped, not replaced: the real implementation is a no-op without a Stripe
+// key, but the spy lets the cutoff-race test assert that a card is NOT
+// detached while a charge may be in flight against it.
+vi.mock("./payments", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./payments")>();
+  return { ...actual, detachPaymentMethod: vi.fn(actual.detachPaymentMethod) };
+});
 
 const TAG = "ZZTEST_JOIN_" + Date.now();
 let cityId = "";
@@ -153,6 +162,49 @@ describe("cancelOrder", () => {
       data: { status: "payment_failed", paymentAttemptedAt: new Date() },
     });
     await expect(cancelOrder(orderId, u.id, new Date("2026-12-01T00:00:00Z"))).rejects.toThrow(/cannot be cancelled/i);
+  });
+
+  // The race this guards, at 07:59:59.9 on cutoff day: the customer's cancel
+  // passes its guard read, the cron then claims the order
+  // (`committed -> payment_pending`) and calls Stripe, and the cancel write
+  // lands afterwards. A plain `update` would set `cancelled` and null the
+  // payment method over a live claim — the charge succeeds, the order says
+  // cancelled, and the card is detached mid-flight.
+  //
+  // The spy on the guard read is what puts the cron's claim in that exact gap.
+  it("loses to the cutoff cron's claim rather than overwriting it", async () => {
+    const u = await prisma.user.create({
+      data: { email: `${TAG}-race2@test`, name: "R2", passwordHash: "x" },
+    });
+    const { orderId } = await joinBasket({ ...joinArgs(), userId: u.id });
+
+    const realRead = prisma.order.findUniqueOrThrow.bind(prisma.order);
+    const spy = vi
+      .spyOn(prisma.order, "findUniqueOrThrow")
+      .mockImplementationOnce((async (args: never) => {
+        const row = await realRead(args);
+        // The cron's conditional claim, landing between the guard and the write.
+        await prisma.order.update({
+          where: { id: orderId },
+          data: { status: "payment_pending", paymentAttemptedAt: new Date() },
+        });
+        return row;
+      }) as never);
+
+    vi.mocked(detachPaymentMethod).mockClear(); // earlier cancels in this file called it
+    try {
+      await expect(
+        cancelOrder(orderId, u.id, new Date("2026-12-01T00:00:00Z"))
+      ).rejects.toThrow(/cannot be cancelled/i);
+    } finally {
+      spy.mockRestore();
+    }
+
+    const after = await prisma.order.findUniqueOrThrow({ where: { id: orderId } });
+    expect(after.status).toBe("payment_pending");
+    // The card the in-flight charge is running against is untouched.
+    expect(after.stripePaymentMethodId).toBe("dev_pm_1");
+    expect(vi.mocked(detachPaymentMethod)).not.toHaveBeenCalled();
   });
 
   it("refuses to cancel someone else's order", async () => {

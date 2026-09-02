@@ -54,7 +54,18 @@ export type CycleRunResult = {
   // against their card is the worst outcome available. Counted separately from
   // `errors` because this one names orders needing human action, not just a
   // run that hit a problem.
+  //
+  // Phase 3's release path adds to this for the same reason: an order that has
+  // reached the attempt cap while still holding an unsettled attempt is left
+  // alone rather than cancelled, because cancelling it would state a falsehood
+  // if that attempt turns out to have taken money.
   needsManualReview: number;
+  // Committed orders in a window whose delivery date passed before the cron
+  // reached its cutoff — the cron was down across both dates. They are never
+  // charged (phase 2 no longer selects the window) and the customer cannot
+  // cancel them (the deadline is behind them), so they need an admin. Counted
+  // and logged loudly rather than left to be noticed by accident.
+  strandedOrders: number;
   // The run stopped early because Stripe rejected our credentials. Nothing
   // after the abort was attempted. The cron route turns this into a non-200 so
   // it pages someone rather than reading as a quiet, successful no-op.
@@ -79,7 +90,7 @@ export async function runCycles(now: Date = new Date()): Promise<CycleRunResult>
   const result: CycleRunResult = {
     windowsCreated: 0, windowsLocked: 0, charged: 0, chargeFailures: 0,
     released: 0, errors: 0, reconciled: 0, duplicatesRefunded: 0,
-    needsManualReview: 0, aborted: false,
+    needsManualReview: 0, strandedOrders: 0, aborted: false,
   };
 
   try {
@@ -120,6 +131,28 @@ async function runPhases(now: Date, result: CycleRunResult): Promise<void> {
   // that has already been and gone would be worse than leaving its orders
   // uncharged for an admin to look at. A past delivery date ends the cycle
   // whatever state it was in, and step 2 then skips it.
+  //
+  // Before closing them out, name the ones that strand orders. A window reached
+  // here with `committed` orders still in it is one whose cutoff AND delivery
+  // date both passed while the cron was down: it will never be charged (step 2
+  // filters to `open`/`locked`), and the customer cannot cancel either, because
+  // `cancelOrder` refuses once the cancellation deadline has passed. Leaving
+  // that to an admin is the right call; leaving it silent is not.
+  const closing = await prisma.deliveryWindow.findMany({
+    where: { status: { in: ["open", "locked"] }, deliveryDate: { lte: now } },
+    include: { city: true },
+  });
+  for (const window of closing) {
+    const stranded = await prisma.order.count({
+      where: { deliveryWindowId: window.id, status: "committed" },
+    });
+    if (stranded === 0) continue;
+    result.strandedOrders += stranded;
+    console.error(
+      `[cycle-run] STRANDED ORDERS: window ${window.id} (${window.city.name}, cutoff ${window.cutoffAt.toISOString()}, delivery ${window.deliveryDate.toISOString()}) is being closed out with ${stranded} committed order(s) that were never charged — the cron did not run between its cutoff and its delivery date. These cannot be charged now and the customer cannot cancel them. THIS NEEDS AN ADMIN.`
+    );
+  }
+
   await prisma.deliveryWindow.updateMany({
     where: { status: { in: ["open", "locked"] }, deliveryDate: { lte: now } },
     data: { status: "dispatched" },
@@ -222,7 +255,41 @@ async function runPhases(now: Date, result: CycleRunResult): Promise<void> {
       const spentAttempts = attemptCount >= MAX_PAYMENT_ATTEMPTS;
 
       if (spentRetries || spentAttempts) {
-        await prisma.order.update({ where: { id: order.id }, data: { status: "cancelled" } });
+        // The cap is a guarantee of an exit, not a licence to state something
+        // untrue. An order still holding a `pending` attempt is one where
+        // nobody has established what Stripe did — phase 0 threw, or the run
+        // that opened it died — and cancelling it would tell the customer
+        // their order is off while a charge may stand unrefunded against
+        // their card. That is the exact outcome the module comment above
+        // calls the worst available. Leave it for a human, counted, like
+        // every other attempt the reconciler could not settle.
+        const unsettled = await prisma.paymentAttempt.count({
+          where: { orderId: order.id, status: "pending" },
+        });
+        if (unsettled > 0) {
+          result.needsManualReview++;
+          console.error(
+            `[payments] NEEDS MANUAL REVIEW: order ${order.id} has reached the attempt cap (${attemptCount} attempts, retry count ${order.paymentRetryCount}) but ${unsettled} attempt(s) are still pending — NOT cancelling it, because a charge may stand against the card. Settle the attempt against Stripe first, then release or refund by hand.`
+          );
+          continue;
+        }
+
+        // Conditional, not a plain update. Between the read above and this
+        // write, a webhook or an overlapping run can move the order to `paid`
+        // — and overwriting a paid order with `cancelled` is a charged
+        // customer holding a cancelled order with no refund path. The filter
+        // names the only two statuses a release may legitimately overwrite.
+        const released = await prisma.order.updateMany({
+          where: { id: order.id, status: { in: ["payment_failed", "payment_pending"] } },
+          data: { status: "cancelled" },
+        });
+        if (released.count === 0) {
+          console.error(
+            `[payments] order ${order.id} moved out of payment_failed/payment_pending before it could be released at the attempt cap — left as it now stands rather than overwritten`
+          );
+          continue;
+        }
+
         result.released++;
         if (spentAttempts && !spentRetries) {
           console.error(
@@ -395,7 +462,15 @@ export async function resolveChargeOutcome(params: {
       // flight, and that call then returns `succeeded`.
       if (outcome.kind === "succeeded") {
         const existing = await tx.paymentAttempt.findUnique({ where: { id: attemptId } });
-        if (existing && existing.stripePaymentIntentId !== outcome.paymentIntentId) {
+        if (!existing) {
+          // The attempt row is gone entirely — deleted by the configuration
+          // rollback, or by hand. There is nowhere to record the intent, so
+          // the log IS the record. Silence here would drop a confirmed charge
+          // on the floor, which every other anomaly in this file is loud about.
+          console.error(
+            `[payments] ORPHANED CHARGE: payment intent ${outcome.paymentIntentId} succeeded for order ${orderId}, but attempt ${attemptId} no longer exists — money taken with no row recording it, REFUND MANUALLY`
+          );
+        } else if (existing.stripePaymentIntentId !== outcome.paymentIntentId) {
           await tx.paymentAttempt.update({
             where: { id: attemptId },
             data: { orphanedPaymentIntentId: outcome.paymentIntentId },
