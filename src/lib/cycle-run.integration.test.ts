@@ -8,8 +8,8 @@ vi.mock("./stripe", () => ({ stripe: null, stripeConfigured: () => false }));
 
 // Wrap the real chargeOrder (still hitting the keyless dev fallback, since
 // ./stripe is mocked to null above) in a spy so individual tests can force a
-// decline with mockImplementationOnce, while every other call keeps behaving
-// exactly like production without a Stripe key.
+// decline or a thrown error with mockImplementationOnce, while every other
+// call keeps behaving exactly like production without a Stripe key.
 vi.mock("./payments", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./payments")>();
   return { ...actual, chargeOrder: vi.fn(actual.chargeOrder) };
@@ -115,8 +115,11 @@ describe("runCycles at the cutoff", () => {
     const intents = (await prisma.order.findMany({ where: { basketId } }))
       .map((o) => o.stripePaymentIntentId);
 
-    const second = await runCycles(AT_CUTOFF);
-    expect(second.charged).toBe(0);
+    // `charged` is a run-wide counter over the shared dev.db, so it isn't
+    // asserted directly here — a concurrently-running integration suite's own
+    // fixtures could contribute to it. What actually matters, and what's
+    // asserted, is that these specific orders' PaymentIntents are unchanged.
+    await runCycles(AT_CUTOFF);
 
     const after = (await prisma.order.findMany({ where: { basketId } }))
       .map((o) => o.stripePaymentIntentId);
@@ -176,6 +179,69 @@ describe("runCycles payment retries", () => {
     const after = await prisma.order.findUniqueOrThrow({ where: { id: order.id } });
     expect(after.status).toBe("cancelled");
   });
+
+  it("releases an exhausted order even after its window has already been delivered (C1)", async () => {
+    const { basketId, windowId } = await scenario({ tierGrams: 10000, joiners: 1 });
+    const order = await prisma.order.findFirstOrThrow({ where: { basketId } });
+    await prisma.order.update({
+      where: { id: order.id },
+      data: {
+        status: "payment_failed",
+        paymentRetryCount: 3,
+        paymentAttemptedAt: new Date("2026-11-15T08:00:00Z"),
+      },
+    });
+    // The window has already been delivered by the time this run happens —
+    // the old code bounded the whole retry sweep (release included) to
+    // windows not yet delivered, so an order like this could never be
+    // released, and joins.ts refuses to let the customer cancel it either
+    // once paymentAttemptedAt is set. It must still be releasable.
+    await prisma.deliveryWindow.update({ where: { id: windowId }, data: { status: "dispatched" } });
+
+    const result = await runCycles(new Date("2026-11-22T08:00:00Z"));
+    expect(result.released).toBeGreaterThanOrEqual(1);
+
+    const after = await prisma.order.findUniqueOrThrow({ where: { id: order.id } });
+    expect(after.status).toBe("cancelled");
+  });
+
+  it("retries a declined charge on a later run and it succeeds (I2)", async () => {
+    const { basketId } = await scenario({ tierGrams: 10000, joiners: 1 });
+
+    vi.mocked(chargeOrder).mockImplementationOnce(async () => ({ ok: false, error: "card_declined" }));
+    await runCycles(AT_CUTOFF);
+
+    const failedOrder = await prisma.order.findFirstOrThrow({ where: { basketId } });
+    expect(failedOrder.status).toBe("payment_failed");
+    expect(failedOrder.paymentRetryCount).toBe(1);
+
+    // A later run, still before the window's delivery date — the mock's
+    // failure was consumed by run 1, so this charge uses the real (always
+    // succeeding) dev fallback.
+    await runCycles(new Date("2026-11-19T08:00:00Z"));
+
+    const after = await prisma.order.findUniqueOrThrow({ where: { id: failedOrder.id } });
+    expect(after.status).toBe("paid");
+    expect(after.paymentRetryCount).toBe(1);
+  });
+});
+
+describe("runCycles failure isolation (C3)", () => {
+  it("isolates a thrown charge error to one order and still charges the rest", async () => {
+    const { basketId } = await scenario({ tierGrams: 10000, joiners: 2 });
+
+    vi.mocked(chargeOrder).mockImplementationOnce(async () => {
+      throw new Error("simulated DB hiccup");
+    });
+
+    const result = await runCycles(AT_CUTOFF);
+    expect(result.errors).toBeGreaterThanOrEqual(1);
+
+    const orders = await prisma.order.findMany({ where: { basketId } });
+    // One order's charge threw; the other order in the same window must
+    // still have been charged rather than the whole run aborting.
+    expect(orders.some((o) => o.status === "paid")).toBe(true);
+  });
 });
 
 describe("runCycles advance", () => {
@@ -206,14 +272,18 @@ describe("runCycles charge failures (C3)", () => {
   });
 });
 
-describe("runCycles payment_pending recovery (C2)", () => {
-  it("recovers an order a crashed run left stuck in payment_pending", async () => {
+describe("runCycles payment_pending recovery (C2 — deliberately inert)", () => {
+  it("reports a stranded payment_pending order without charging it again", async () => {
     const { basketId, windowId } = await scenario({ tierGrams: 10000, joiners: 1 });
     const order = await prisma.order.findFirstOrThrow({ where: { basketId } });
 
     // Simulate the crash: the window is locked, but the order itself never
     // reached a terminal status — the process died between claiming it and
-    // Stripe replying.
+    // Stripe replying. Recovery does NOT know whether Stripe actually
+    // charged the card, so charging again here risks a double charge — the
+    // fix for that is a dedicated task (payment-attempt audit trail, webhook
+    // reconciliation). Until then this must stay untouched and merely
+    // reported.
     await prisma.deliveryWindow.update({ where: { id: windowId }, data: { status: "locked" } });
     const staleAttempt = new Date(AT_CUTOFF.getTime() - 20 * 60 * 1000); // 20 min before cutoff
     await prisma.order.update({
@@ -221,10 +291,19 @@ describe("runCycles payment_pending recovery (C2)", () => {
       data: { status: "payment_pending", paymentAttemptedAt: staleAttempt },
     });
 
-    await runCycles(AT_CUTOFF);
+    const result = await runCycles(AT_CUTOFF);
+    expect(result.strandedPending).toBeGreaterThanOrEqual(1);
+
+    // `chargeOrder` is a run-wide spy, so rather than assert it was never
+    // called at all (other fixtures sharing the run could call it), check
+    // that none of the calls made were for THIS order's idempotency key.
+    const calledForThisOrder = vi.mocked(chargeOrder).mock.calls
+      .some(([params]) => params.idempotencyKey?.includes(order.id));
+    expect(calledForThisOrder).toBe(false);
 
     const after = await prisma.order.findUniqueOrThrow({ where: { id: order.id } });
-    expect(after.status).toBe("paid");
-    expect(after.stripePaymentIntentId).not.toBeNull();
+    expect(after.status).toBe("payment_pending");
+    expect(after.paymentRetryCount).toBe(0);
+    expect(after.stripePaymentIntentId).toBeNull();
   });
 });
