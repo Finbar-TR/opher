@@ -520,8 +520,17 @@ Unique on (`orderId`, `attemptNumber`).
 1. **Claim** the order — conditional `updateMany` from `committed` or
    `payment_failed` to `payment_pending`, stamping `paymentAttemptedAt`. Zero
    rows claimed means another runner owns it; stop.
-2. Derive `attemptNumber` from `paymentRetryCount` and
+2. `attemptNumber` = the count of attempts already recorded for this order;
    `idempotencyKey = order-{orderId}-attempt-{attemptNumber}`.
+
+   **`attemptNumber` must not be derived from `paymentRetryCount`.** An earlier
+   draft did, and it deadlocks: an abandoned attempt leaves the retry count
+   unchanged (§7.6.6), so the next attempt recomputes the same number, collides
+   on `@@unique([orderId, attemptNumber])`, and the runner stops — every run,
+   for ever, leaving the order uncharged *and* uncancellable. The two counters
+   measure different things and must stay independent: `attemptNumber` counts
+   what we tried, `paymentRetryCount` is the customer's budget of three
+   established declines.
 3. **Write the `PaymentAttempt` row as `pending` before any network call.**
    This is the write-ahead record: past this point we can always tell that a
    call *may* have been made. The unique key on (`orderId`, `attemptNumber`) is
@@ -538,8 +547,16 @@ Unique on (`orderId`, `attemptNumber`).
 
 For every `pending` attempt older than `PAYMENT_RECONCILE_AFTER_MINUTES` (10):
 
-1. `paymentIntents.list({ customer, created: { gte: attempt.createdAt - 1h } })`,
-   matched client-side on `metadata.orderId` and `metadata.attemptNumber`.
+1. `paymentIntents.list({ customer, created: { gte: … } })`, matched
+   client-side on `metadata.orderId` and `metadata.attemptNumber`.
+
+   **The lookback must always reach back past the attempt's own `createdAt`.** A
+   fixed window is a double-charge hole: after an outage longer than the window,
+   the intent falls out of range, the sweep concludes "no payment exists", and
+   that is the branch which authorises a fresh charge. **And the listing must be
+   paged to exhaustion** — concluding "no payment" from a truncated first page
+   is inference, which is the thing this whole section exists to forbid. If
+   paging cannot complete, throw rather than return an incomplete answer.
 2. **Found — adopt it.** Record the intent id and map its status. Never charge.
 3. **Not found — the request never reached Stripe.** Mark the attempt
    `abandoned` and return the order to `payment_failed` **without incrementing
