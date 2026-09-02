@@ -4,7 +4,8 @@ import { prisma } from "./prisma";
 import {
   MAX_PAYMENT_ATTEMPTS,
   MAX_PAYMENT_RETRIES,
-  PAYMENT_LOOKBACK_HOURS,
+  PAYMENT_LOOKUP_AFTER_HOURS,
+  PAYMENT_LOOKUP_BEFORE_MINUTES,
   PAYMENT_RECONCILE_AFTER_MINUTES,
 } from "./constants";
 import { ensureOpenWindows } from "./windows";
@@ -46,6 +47,14 @@ export type CycleRunResult = {
   reconciled: number;
   // Successful charges found to be duplicates and refunded automatically.
   duplicatesRefunded: number;
+  // Attempts the reconciler could not settle, leaving an order frozen in
+  // `payment_pending` until a human resolves it. Deliberately NOT auto-cancelled:
+  // these are the cases where we cannot say whether money moved, and telling a
+  // customer their order is cancelled while a charge may stand unrefunded
+  // against their card is the worst outcome available. Counted separately from
+  // `errors` because this one names orders needing human action, not just a
+  // run that hit a problem.
+  needsManualReview: number;
   // The run stopped early because Stripe rejected our credentials. Nothing
   // after the abort was attempted. The cron route turns this into a non-200 so
   // it pages someone rather than reading as a quiet, successful no-op.
@@ -69,7 +78,8 @@ function recordOutcome(result: CycleRunResult, outcome: AttemptResult): void {
 export async function runCycles(now: Date = new Date()): Promise<CycleRunResult> {
   const result: CycleRunResult = {
     windowsCreated: 0, windowsLocked: 0, charged: 0, chargeFailures: 0,
-    released: 0, errors: 0, reconciled: 0, duplicatesRefunded: 0, aborted: false,
+    released: 0, errors: 0, reconciled: 0, duplicatesRefunded: 0,
+    needsManualReview: 0, aborted: false,
   };
 
   try {
@@ -492,20 +502,26 @@ async function reconcileInterruptedAttempts(
         continue;
       }
 
-      // The lookback is a floor, not a ceiling. Always widen the search to
-      // cover the attempt's own creation time: if the cron were down for three
-      // days, a fixed 48-hour window would put the real PaymentIntent out of
-      // range, "nothing found" would read as "no charge exists", and we would
-      // charge the card a second time — the exact bug this task removes.
-      const lookbackFrom = new Date(now.getTime() - PAYMENT_LOOKBACK_HOURS * 60 * 60 * 1000);
-      const attemptFrom = new Date(attempt.createdAt.getTime() - 5 * 60 * 1000);
-      const since = attemptFrom < lookbackFrom ? attemptFrom : lookbackFrom;
+      // Both ends anchored on the ATTEMPT, never on `now`. The write-ahead
+      // ordering means the intent, if one exists, was created within seconds
+      // of this row, so a fixed window either side of it always contains the
+      // answer — and, unlike a window reaching back from now, it does not grow
+      // as the attempt ages. That is what keeps the paging bounded: a search
+      // range that widened daily would eventually sweep months of a customer's
+      // PaymentIntents and hit the page limit.
+      const since = new Date(
+        attempt.createdAt.getTime() - PAYMENT_LOOKUP_BEFORE_MINUTES * 60 * 1000
+      );
+      const until = new Date(
+        attempt.createdAt.getTime() + PAYMENT_LOOKUP_AFTER_HOURS * 60 * 60 * 1000
+      );
 
       const intents = await findIntentsForAttempt({
         customerId,
         orderId: attempt.orderId,
         attemptNumber: attempt.attemptNumber,
         since,
+        until,
       });
 
       if (intents.length === 0) {
@@ -579,7 +595,15 @@ async function reconcileInterruptedAttempts(
     } catch (err) {
       throwIfFatalConfig(err);
       result.errors++;
-      console.error(`[cycle-run] reconciling payment attempt ${attempt.id} threw:`, err);
+      // The attempt stays `pending` and its order stays `payment_pending`.
+      // That is the correct terminal state when we cannot establish whether
+      // money moved — but it must not be a silent one, so it is named here and
+      // counted into the run result for whoever reads it.
+      result.needsManualReview++;
+      console.error(
+        `[payments] NEEDS MANUAL REVIEW: could not establish what Stripe did with order ${attempt.orderId} attempt ${attempt.attemptNumber} (attempt id ${attempt.id}, customer ${attempt.order.stripeCustomerId ?? "none"}). The order stays payment_pending and is NOT being charged again or cancelled, because a charge may stand against the card. Reason:`,
+        err
+      );
     }
   }
 }

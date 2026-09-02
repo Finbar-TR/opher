@@ -116,11 +116,21 @@ export const CRON_MAX_DURATION_SECONDS = 300;
 // comment.
 export const PAYMENT_RECONCILE_AFTER_MINUTES = 10;
 
-// How far back to look when searching Stripe for an orphaned PaymentIntent.
-// Generous: a missed cron day must not put the intent out of range. It is a
-// floor, not a ceiling — the reconciler always widens the window to cover the
-// attempt's own creation time, so an attempt older than this is still found.
-export const PAYMENT_LOOKBACK_HOURS = 48;
+// How far either side of a charge attempt's OWN timestamp to search Stripe for
+// the PaymentIntent it may have created.
+//
+// Anchored on the attempt, never on the current time. The write-ahead ordering
+// guarantees the intent — if one exists at all — was created within seconds of
+// the attempt row, so this window is generous for clock skew and a slow call
+// while staying CONSTANT: it does not widen as the attempt ages.
+//
+// That property is what keeps `findIntentsForAttempt`'s paging bounded. An
+// earlier design anchored the lower bound on `now`, so the range grew every day
+// an attempt stayed unsettled, eventually sweeping months of a customer's
+// PaymentIntents and hitting the page limit — which froze the order for a human
+// precisely because it had been waiting for a human.
+export const PAYMENT_LOOKUP_BEFORE_MINUTES = 5;
+export const PAYMENT_LOOKUP_AFTER_HOURS = 24;
 
 export const PAYMENT_ATTEMPT_STATUSES = [
   "pending",

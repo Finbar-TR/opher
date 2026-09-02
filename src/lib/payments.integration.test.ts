@@ -64,6 +64,7 @@ describe("payments without a Stripe key", () => {
       orderId: "order_1",
       attemptNumber: 0,
       since: new Date(Date.now() - 60_000),
+      until: new Date(Date.now() + 60_000),
     });
     expect(intents).toEqual([]);
   });

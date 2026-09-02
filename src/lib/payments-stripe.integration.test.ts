@@ -82,6 +82,7 @@ describe("findIntentsForAttempt against a live-shaped Stripe", () => {
       orderId: "order_A",
       attemptNumber: 0,
       since: new Date("2026-09-01T00:00:00Z"),
+      until: new Date("2026-09-02T00:00:00Z"),
     });
 
     // Both halves of the filter matter: an intent for a different order, and
@@ -90,19 +91,26 @@ describe("findIntentsForAttempt against a live-shaped Stripe", () => {
     expect(found.map((p) => p.id)).toEqual(["pi_mine"]);
   });
 
-  it("sends the customer and the created floor to Stripe", async () => {
+  it("sends the customer and a bounded created range to Stripe", async () => {
     const { findIntentsForAttempt } = await import("./payments");
     const since = new Date("2026-09-01T00:00:00Z");
+    const until = new Date("2026-09-02T00:00:00Z");
     h.state.listPages = [page([])];
 
     await findIntentsForAttempt({
-      customerId: "cus_1", orderId: "order_A", attemptNumber: 0, since,
+      customerId: "cus_1", orderId: "order_A", attemptNumber: 0, since, until,
     });
 
+    // Both ends. An open-topped range is what let the search grow without
+    // bound as an attempt aged, and unbounded growth is what made paging
+    // unable to terminate.
     expect(h.state.listCalls[0]).toMatchObject({
       customer: "cus_1",
       limit: 100,
-      created: { gte: Math.floor(since.getTime() / 1000) },
+      created: {
+        gte: Math.floor(since.getTime() / 1000),
+        lte: Math.ceil(until.getTime() / 1000),
+      },
     });
     // First page must not carry a cursor.
     expect(h.state.listCalls[0]).not.toHaveProperty("starting_after");
@@ -113,7 +121,7 @@ describe("findIntentsForAttempt against a live-shaped Stripe", () => {
     h.state.listPages = [page([pi("pi_1", "order_A", "0")], false), page([pi("pi_2", "order_A", "0")])];
 
     const found = await findIntentsForAttempt({
-      customerId: "cus_1", orderId: "order_A", attemptNumber: 0, since: new Date(0),
+      customerId: "cus_1", orderId: "order_A", attemptNumber: 0, since: new Date(0), until: new Date(1e12),
     });
 
     expect(found.map((p) => p.id)).toEqual(["pi_1"]);
@@ -131,7 +139,7 @@ describe("findIntentsForAttempt against a live-shaped Stripe", () => {
     ];
 
     const found = await findIntentsForAttempt({
-      customerId: "cus_1", orderId: "order_A", attemptNumber: 0, since: new Date(0),
+      customerId: "cus_1", orderId: "order_A", attemptNumber: 0, since: new Date(0), until: new Date(1e12),
     });
 
     expect(found.map((p) => p.id)).toEqual(["pi_first", "pi_second"]);
@@ -149,7 +157,7 @@ describe("findIntentsForAttempt against a live-shaped Stripe", () => {
 
     await expect(
       findIntentsForAttempt({
-        customerId: "cus_1", orderId: "order_A", attemptNumber: 0, since: new Date(0),
+        customerId: "cus_1", orderId: "order_A", attemptNumber: 0, since: new Date(0), until: new Date(1e12),
       })
     ).rejects.toThrow(/refusing to conclude anything/);
 
@@ -162,7 +170,7 @@ describe("findIntentsForAttempt against a live-shaped Stripe", () => {
     h.state.listPages = [page([], true)];
 
     const found = await findIntentsForAttempt({
-      customerId: "cus_1", orderId: "order_A", attemptNumber: 0, since: new Date(0),
+      customerId: "cus_1", orderId: "order_A", attemptNumber: 0, since: new Date(0), until: new Date(1e12),
     });
 
     expect(found).toEqual([]);

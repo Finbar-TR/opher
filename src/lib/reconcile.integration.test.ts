@@ -3,7 +3,12 @@ import type Stripe from "stripe";
 import { prisma } from "./prisma";
 import { runCycles } from "./cycle-run";
 import { chargeOrder, findIntentsForAttempt, refundPaymentIntent } from "./payments";
-import { MAX_PAYMENT_ATTEMPTS, MAX_PAYMENT_RETRIES } from "./constants";
+import {
+  MAX_PAYMENT_ATTEMPTS,
+  MAX_PAYMENT_RETRIES,
+  PAYMENT_LOOKUP_AFTER_HOURS,
+  PAYMENT_LOOKUP_BEFORE_MINUTES,
+} from "./constants";
 
 // Reconciliation of interrupted charge attempts.
 //
@@ -536,6 +541,28 @@ describe("reconciling an interrupted charge", () => {
     expect(chargedThisOrder(orderId)).toBe(false);
   });
 
+  // When the reconciler genuinely cannot say what Stripe did, the order stays
+  // frozen for a human — never auto-cancelled, because a charge may stand
+  // against the card. Correct, but it must not be silent.
+  it("counts an attempt it cannot settle as needing manual review", async () => {
+    const { orderId, attemptId } = await strandedOrder({ attemptCreatedAt: STALE });
+    vi.mocked(findIntentsForAttempt).mockImplementation(async (params) => {
+      if (params.orderId === orderId) throw new Error("refusing to conclude anything");
+      return [];
+    });
+
+    const result = await runCycles(NOW);
+
+    expect(result.needsManualReview).toBeGreaterThanOrEqual(1);
+
+    // Frozen, not resolved and not cancelled.
+    const attempt = await prisma.paymentAttempt.findUniqueOrThrow({ where: { id: attemptId } });
+    expect(attempt.status).toBe("pending");
+    const order = await prisma.order.findUniqueOrThrow({ where: { id: orderId } });
+    expect(order.status).toBe("payment_pending");
+    expect(chargedThisOrder(orderId)).toBe(false);
+  });
+
   // We can never charge without a customer id, and no amount of reconciling
   // will conjure one — so "this can never be paid" is established, not
   // inferred. Leaving it pending was its own trap.
@@ -557,6 +584,36 @@ describe("reconciling an interrupted charge", () => {
     expect(order.paymentRetryCount).toBe(1);
     // Stripe was never asked: there was no customer to ask about.
     expect(lookedUpThisOrder(orderId)).toBe(false);
+  });
+
+  // The search range is anchored on the ATTEMPT, not on the clock. The
+  // write-ahead ordering guarantees any PaymentIntent was created within
+  // seconds of the attempt row, so the window never needs to reach back from
+  // now — and because it never widens, an attempt waiting for months still
+  // produces the same narrow query as one waiting for minutes. That is what
+  // keeps paging bounded and the page-limit throw out of reach.
+  it("anchors the Stripe search on the attempt and does not widen with age", async () => {
+    const longAgo = new Date(NOW.getTime() - 120 * 24 * 60 * 60 * 1000); // four months
+    const { orderId } = await strandedOrder({ attemptCreatedAt: longAgo });
+    stripeHolds(orderId, []);
+
+    await runCycles(NOW);
+
+    const call = vi.mocked(findIntentsForAttempt).mock.calls
+      .map(([p]) => p)
+      .find((p) => p.orderId === orderId);
+    expect(call).toBeDefined();
+
+    const beforeMs = longAgo.getTime() - call!.since.getTime();
+    const afterMs = call!.until.getTime() - longAgo.getTime();
+    expect(beforeMs).toBe(PAYMENT_LOOKUP_BEFORE_MINUTES * 60 * 1000);
+    expect(afterMs).toBe(PAYMENT_LOOKUP_AFTER_HOURS * 60 * 60 * 1000);
+
+    // The decisive assertion: the range sits back at the attempt, nowhere near
+    // now. Under the old `now - 48h` lower bound this span was four months.
+    const spanHours = (call!.until.getTime() - call!.since.getTime()) / 3_600_000;
+    expect(spanHours).toBeLessThan(25);
+    expect(call!.until.getTime()).toBeLessThan(NOW.getTime());
   });
 
   // Reconciliation is idempotent: a second run finds nothing left pending, so

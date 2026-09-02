@@ -236,15 +236,26 @@ export function outcomeFromError(err: unknown): ChargeOutcome {
 // truncated list. An empty result means "Stripe holds nothing for this
 // attempt", and the caller acts on that by charging again, so it must never be
 // reachable by having simply stopped looking.
+//
+// `since`/`until` are BOUNDED AND ANCHORED ON THE ATTEMPT, not on the current
+// time. The write-ahead ordering guarantees any intent was created within
+// seconds of the attempt row, so a fixed window either side of it is both
+// tighter and more correct than one that reaches back from now — and, because
+// it never widens, it keeps the paging below bounded no matter how long an
+// attempt has been waiting.
 export async function findIntentsForAttempt(params: {
   customerId: string;
   orderId: string;
   attemptNumber: number;
   since: Date;
+  until: Date;
 }): Promise<Stripe.PaymentIntent[]> {
   if (!stripe) return [];
 
-  const created = { gte: Math.floor(params.since.getTime() / 1000) };
+  const created = {
+    gte: Math.floor(params.since.getTime() / 1000),
+    lte: Math.ceil(params.until.getTime() / 1000),
+  };
   const found: Stripe.PaymentIntent[] = [];
   let startingAfter: string | undefined;
 
