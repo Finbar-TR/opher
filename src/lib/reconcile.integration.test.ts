@@ -508,11 +508,23 @@ describe("reconciling an interrupted charge", () => {
   // reconciler could never settle stayed `payment_pending` — outside both caps
   // and still uncancellable. The cap is only a guarantee if it reaches an order
   // wherever it is sitting.
+  //
+  // Every attempt here is SETTLED — the order is sitting in `payment_pending`
+  // with nothing outstanding at Stripe, so cancelling it states nothing that
+  // might turn out to be false. An order still holding a `pending` attempt is a
+  // different case and is deliberately NOT released — see "does not cancel a
+  // capped order that still has an unsettled attempt" in
+  // cycle-run.integration.test.ts.
   it("releases a payment_pending order that has hit the attempt cap", async () => {
-    const { orderId } = await strandedOrder({
+    const { orderId, attemptId } = await strandedOrder({
       attemptCreatedAt: new Date(NOW.getTime() - 24 * 60 * 60 * 1000),
     });
-    // Fill up to the cap. Attempt 0 already exists from the fixture.
+    // Fill up to the cap. Attempt 0 already exists from the fixture, still
+    // `pending`; settle it, so nothing about this order is unestablished.
+    await prisma.paymentAttempt.update({
+      where: { id: attemptId },
+      data: { status: "abandoned", resolvedAt: NOW },
+    });
     for (let n = 1; n < MAX_PAYMENT_ATTEMPTS; n++) {
       await prisma.paymentAttempt.create({
         data: {
@@ -524,11 +536,6 @@ describe("reconciling an interrupted charge", () => {
         },
       });
     }
-    // Nothing the reconciler can conclude: Stripe refuses to answer at all.
-    vi.mocked(findIntentsForAttempt).mockImplementation(async (params) => {
-      if (params.orderId === orderId) throw new Error("cannot enumerate this customer");
-      return [];
-    });
 
     const before = await prisma.order.findUniqueOrThrow({ where: { id: orderId } });
     expect(before.status).toBe("payment_pending");

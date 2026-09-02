@@ -353,13 +353,33 @@ describe("a credentials failure aborts the run", () => {
     process.env.CRON_SECRET = "cron_test_secret";
 
     const res = await GET(
-      new NextRequest("http://localhost/api/cron/cycles?key=cron_test_secret", { method: "GET" })
+      // The header is the only accepted form of the secret: a `?key=` query
+      // string would put CRON_SECRET into every access log permanently.
+      new NextRequest("http://localhost/api/cron/cycles", {
+        method: "GET",
+        headers: { authorization: "Bearer cron_test_secret" },
+      })
     );
 
     // Every counter is zero on an aborted run, exactly as on a quiet day with
     // no orders due. Only the status code tells the two apart.
     expect(res.status).toBe(503);
     expect(await res.json()).toMatchObject({ ok: false, aborted: true });
+  });
+
+  // The query-string form of the secret is gone for good: it wrote CRON_SECRET
+  // into access logs, proxy logs and referrers, permanently, every time the
+  // cron fired. Vercel Cron sends the header, so nothing legitimate used it.
+  it("refuses the secret in a query string", async () => {
+    const { GET } = await import("@/app/api/cron/cycles/route");
+    const { NextRequest } = await import("next/server");
+    process.env.CRON_SECRET = "cron_test_secret";
+
+    const res = await GET(
+      new NextRequest("http://localhost/api/cron/cycles?key=cron_test_secret", { method: "GET" })
+    );
+
+    expect(res.status).toBe(401);
   });
 });
 

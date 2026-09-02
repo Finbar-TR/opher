@@ -16,21 +16,23 @@ export const CITIES = [
   "Bristol",
   "Nottingham",
 ] as const;
-export type CityName = (typeof CITIES)[number];
 
 export const PRODUCT_CATEGORIES = ["dry", "fresh"] as const;
-export type ProductCategory = (typeof PRODUCT_CATEGORIES)[number];
 
 export const BASKET_STATUSES = ["open", "paused", "archived"] as const;
 export type BasketStatus = (typeof BASKET_STATUSES)[number];
 
-export const BASKET_STATUS_LABELS: Record<BasketStatus, string> = {
-  open: "Open — accepting joins",
-  paused: "Paused",
-  archived: "Archived",
-};
-
-export const WINDOW_STATUSES = ["open", "locked", "dispatched", "cancelled"] as const;
+// `rolled_over` is a window the operator moved to the next delivery date rather
+// than running it — a thin cycle, a supply problem. It is terminal for this
+// window: `cycle-run.ts` phase 2 only ever selects `open`/`locked`, so a
+// rolled-over window is excluded from the cutoff and charges nobody.
+export const WINDOW_STATUSES = [
+  "open",
+  "locked",
+  "dispatched",
+  "cancelled",
+  "rolled_over",
+] as const;
 export type WindowStatus = (typeof WINDOW_STATUSES)[number];
 
 export const ORDER_STATUSES = [
@@ -45,17 +47,6 @@ export const ORDER_STATUSES = [
 ] as const;
 export type OrderStatus = (typeof ORDER_STATUSES)[number];
 
-export const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
-  committed: "You're in — not charged yet",
-  payment_pending: "Payment in progress",
-  paid: "Paid",
-  payment_failed: "Payment failed",
-  dispatching: "On its way",
-  delivered: "Delivered",
-  cancelled: "Cancelled",
-  refunded: "Refunded",
-};
-
 // Orders in these statuses count toward a basket's demand for a window.
 // cancelled, refunded and payment_failed are excluded.
 export const DEMAND_COUNTED_STATUSES: OrderStatus[] = [
@@ -63,18 +54,6 @@ export const DEMAND_COUNTED_STATUSES: OrderStatus[] = [
   "payment_pending",
   "paid",
 ];
-
-export const SNAPSHOT_OUTCOMES = ["pending", "confirmed", "failed"] as const;
-export type SnapshotOutcome = (typeof SNAPSHOT_OUTCOMES)[number];
-
-export const PO_STATUSES = [
-  "pending",
-  "sent",
-  "confirmed",
-  "received_at_3pl",
-  "failed",
-] as const;
-export type PoStatus = (typeof PO_STATUSES)[number];
 
 // The hour (UTC) at which a window's cutoff falls and the daily cron runs.
 // These are the same moment by design: the cutoff IS the charge.
