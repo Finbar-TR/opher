@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+import Stripe from "stripe";
 import { stripe } from "@/lib/stripe";
+import { reconcileSetupIntent } from "@/lib/joins";
 
 // Stripe posts events here. Verifies the signature, then dispatches by event
 // type. The SetupIntent case (deferred card capture) is added in Task 7.
@@ -23,6 +25,13 @@ export async function POST(req: NextRequest) {
   }
 
   switch (event.type) {
+    case "setup_intent.succeeded": {
+      const si = event.data.object as Stripe.SetupIntent;
+      const paymentMethodId =
+        typeof si.payment_method === "string" ? si.payment_method : si.payment_method?.id;
+      if (paymentMethodId) await reconcileSetupIntent(si.id, paymentMethodId);
+      break;
+    }
     default:
       console.log(`Unhandled Stripe event: ${event.type}`);
   }
