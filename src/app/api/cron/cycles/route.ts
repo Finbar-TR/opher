@@ -33,6 +33,18 @@ async function handle(req: NextRequest) {
   }
 
   const result = await runCycles();
+
+  // An aborted run charged nobody because Stripe rejected our credentials.
+  // Reporting that as 200 would let a broken deploy look like a quiet day with
+  // no orders due — the counters are all zero either way. A 503 is what makes
+  // the scheduler's own alerting page someone.
+  if (result.aborted) {
+    return NextResponse.json(
+      { ok: false, error: "Stripe credentials rejected — no orders were charged", ...result },
+      { status: 503 }
+    );
+  }
+
   return NextResponse.json({ ok: true, ...result });
 }
 

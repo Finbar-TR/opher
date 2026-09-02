@@ -283,6 +283,78 @@ describe("chargeOrder against a live-shaped Stripe", () => {
   });
 });
 
+// Broken credentials are OUR fault, not the customer's. Recording them as a
+// failed charge would spend one of their three tries, so a botched deploy would
+// burn every retry on every order and cancel the whole order book within days.
+// And if the key is wrong nothing will work, so the run must stop rather than
+// iterate orders it cannot possibly charge.
+describe("a credentials failure aborts the run", () => {
+  it.each([
+    ["a rejected key", () => new Stripe.errors.StripeAuthenticationError({ message: "Invalid API Key provided" } as never)],
+    ["a restricted key", () => new Stripe.errors.StripePermissionError({ message: "not permitted to access this resource" } as never)],
+  ])("stops on %s, having charged and changed nothing", async (_label, makeErr) => {
+    const { prisma } = await import("./prisma");
+    const { runCycles } = await import("./cycle-run");
+    const { order } = await webhookFixture();
+
+    // Put the order back where the cutoff phase will pick it up, with no
+    // attempt history, so the whole write-ahead protocol runs.
+    await prisma.paymentAttempt.deleteMany({ where: { orderId: order } });
+    await prisma.order.update({
+      where: { id: order },
+      data: { status: "committed", paymentAttemptedAt: null },
+    });
+    h.state.createImpl = () => {
+      throw makeErr();
+    };
+
+    const result = await runCycles(new Date("2027-01-17T08:00:00Z")); // at the cutoff
+
+    expect(result.aborted).toBe(true);
+    expect(result.charged).toBe(0);
+    expect(result.chargeFailures).toBe(0);
+    expect(result.released).toBe(0);
+
+    // The order is untouched: not charged, not failed, not even claimed. A
+    // misconfigured deploy does nothing rather than doing harm.
+    const after = await prisma.order.findUniqueOrThrow({ where: { id: order } });
+    expect(after.status).toBe("committed");
+    expect(after.paymentAttemptedAt).toBeNull();
+    expect(after.paymentRetryCount).toBe(0);
+    expect(after.stripePaymentIntentId).toBeNull();
+
+    // And no attempt row survives — the write-ahead is undone, because a
+    // rejected key means Stripe never saw a PaymentIntent at all.
+    expect(await prisma.paymentAttempt.count({ where: { orderId: order } })).toBe(0);
+  });
+
+  it("does not report an aborted run as a success to the scheduler", async () => {
+    const { prisma } = await import("./prisma");
+    const { GET } = await import("@/app/api/cron/cycles/route");
+    const { NextRequest } = await import("next/server");
+    const { order } = await webhookFixture({ dueNow: true });
+
+    await prisma.paymentAttempt.deleteMany({ where: { orderId: order } });
+    await prisma.order.update({
+      where: { id: order },
+      data: { status: "committed", paymentAttemptedAt: null },
+    });
+    h.state.createImpl = () => {
+      throw new Stripe.errors.StripeAuthenticationError({ message: "Invalid API Key" } as never);
+    };
+    process.env.CRON_SECRET = "cron_test_secret";
+
+    const res = await GET(
+      new NextRequest("http://localhost/api/cron/cycles?key=cron_test_secret", { method: "GET" })
+    );
+
+    // Every counter is zero on an aborted run, exactly as on a quiet day with
+    // no orders due. Only the status code tells the two apart.
+    expect(res.status).toBe(503);
+    expect(await res.json()).toMatchObject({ ok: false, aborted: true });
+  });
+});
+
 describe("refundPaymentIntent and cancelPaymentIntent", () => {
   it("keys a refund on the intent, so overlapping runs refund once", async () => {
     const { refundPaymentIntent } = await import("./payments");
@@ -507,7 +579,10 @@ afterAll(async () => {
   await prisma.user.deleteMany({ where: { email: { startsWith: WEBHOOK_TAG } } });
 });
 
-async function webhookFixture() {
+// `dueNow` puts the window's cutoff just behind the real clock, for the tests
+// that call runCycles() with no argument (as the cron route does) and need the
+// cutoff phase to actually pick the order up.
+async function webhookFixture(opts: { dueNow?: boolean } = {}) {
   const { prisma } = await import("./prisma");
   const suffix = Math.random().toString(16).slice(2, 8);
   const city = await prisma.city.create({
@@ -535,12 +610,14 @@ async function webhookFixture() {
     },
     include: { tiers: true },
   });
-  const cutoff = new Date("2027-01-17T08:00:00Z");
+  const cutoff = opts.dueNow
+    ? new Date(Date.now() - 60 * 60 * 1000)
+    : new Date("2027-01-17T08:00:00Z");
+  const delivery = opts.dueNow
+    ? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
+    : new Date("2027-01-20T00:00:00Z");
   const window = await prisma.deliveryWindow.create({
-    data: {
-      cityId: city.id, deliveryDate: new Date("2027-01-20T00:00:00Z"),
-      cutoffAt: cutoff, status: "locked",
-    },
+    data: { cityId: city.id, deliveryDate: delivery, cutoffAt: cutoff, status: "locked" },
   });
   const user = await prisma.user.create({
     data: { email: `${WEBHOOK_TAG}-${suffix}-u@test`, name: "U", passwordHash: "x" },

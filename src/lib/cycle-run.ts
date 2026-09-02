@@ -14,6 +14,8 @@ import {
   findIntentsForAttempt,
   outcomeFromIntent,
   refundPaymentIntent,
+  throwIfFatalConfig,
+  PaymentConfigurationError,
   type ChargeOutcome,
 } from "./payments";
 
@@ -44,6 +46,10 @@ export type CycleRunResult = {
   reconciled: number;
   // Successful charges found to be duplicates and refunded automatically.
   duplicatesRefunded: number;
+  // The run stopped early because Stripe rejected our credentials. Nothing
+  // after the abort was attempted. The cron route turns this into a non-200 so
+  // it pages someone rather than reading as a quiet, successful no-op.
+  aborted: boolean;
 };
 
 // What trying to charge one order came to.
@@ -63,9 +69,34 @@ function recordOutcome(result: CycleRunResult, outcome: AttemptResult): void {
 export async function runCycles(now: Date = new Date()): Promise<CycleRunResult> {
   const result: CycleRunResult = {
     windowsCreated: 0, windowsLocked: 0, charged: 0, chargeFailures: 0,
-    released: 0, errors: 0, reconciled: 0, duplicatesRefunded: 0,
+    released: 0, errors: 0, reconciled: 0, duplicatesRefunded: 0, aborted: false,
   };
 
+  try {
+    await runPhases(now, result);
+  } catch (err) {
+    // The only error that reaches here. Every other fault is isolated to one
+    // window, order or attempt; this one is a fact about the whole run, so the
+    // run stops rather than iterating orders it cannot possibly charge.
+    if (!(err instanceof PaymentConfigurationError)) throw err;
+
+    result.aborted = true;
+    console.error(
+      "\n" +
+        "================================================================\n" +
+        "[payments] RUN ABORTED — STRIPE REJECTED OUR CREDENTIALS\n" +
+        `  ${err.message}\n` +
+        "  No order was charged, released or modified after this point.\n" +
+        "  Check STRIPE_SECRET_KEY: rotated, revoked, or missing permissions.\n" +
+        "  THIS NEEDS A HUMAN NOW — the daily charge run is not happening.\n" +
+        "================================================================\n"
+    );
+  }
+
+  return result;
+}
+
+async function runPhases(now: Date, result: CycleRunResult): Promise<void> {
   // 0. Reconcile interrupted charge attempts against Stripe, BEFORE anything
   // else. An order left in `payment_pending` by a crashed run is not
   // chargeable again until we know what Stripe did with the first attempt, so
@@ -120,11 +151,16 @@ export async function runCycles(now: Date = new Date()): Promise<CycleRunResult>
         try {
           recordOutcome(result, await attemptCharge(order.id, now));
         } catch (err) {
+          // Per-order isolation, EXCEPT for a run-level fault: broken
+          // credentials are not this order's problem and every subsequent
+          // order would fail the same way.
+          throwIfFatalConfig(err);
           result.errors++;
           console.error(`[cycle-run] order ${order.id} in window ${window.id} threw:`, err);
         }
       }
     } catch (err) {
+      throwIfFatalConfig(err);
       result.errors++;
       console.error(`[cycle-run] window ${window.id} threw:`, err);
     }
@@ -140,20 +176,28 @@ export async function runCycles(now: Date = new Date()): Promise<CycleRunResult>
   // phase 0 against Stripe itself. An order still in `payment_pending` here is
   // one phase 0 could not resolve, and it is left alone by design.
   //
-  // Release is evaluated for every `payment_failed` order regardless of its
-  // window's delivery date — an order that has exhausted its retries must
-  // always be releasable, or it sits uncharged AND uncancellable forever
-  // (joins.ts refuses to cancel once `paymentAttemptedAt` is set). Only the
-  // decision to attempt *another* charge is bounded: not this same run
-  // (paymentAttemptedAt < now excludes anything phase 0 or phase 2 just
-  // touched — retrying seconds later with no daily gap is a resend, not a
-  // retry) and not a window whose delivery has already passed, which is an
-  // admin matter now.
-  const failedOrders = await prisma.order.findMany({
-    where: { status: "payment_failed", paymentAttemptedAt: { lt: now } },
+  // Release is evaluated regardless of the window's delivery date — an order
+  // that has exhausted its tries must always be releasable, or it sits
+  // uncharged AND uncancellable forever (joins.ts refuses to cancel once
+  // `paymentAttemptedAt` is set). Only the decision to attempt *another* charge
+  // is bounded: not this same run (paymentAttemptedAt < now excludes anything
+  // phase 0 or phase 2 just touched — retrying seconds later with no daily gap
+  // is a resend, not a retry) and not a window whose delivery has already
+  // passed, which is an admin matter now.
+  //
+  // `payment_pending` orders are selected too, for the release checks ONLY.
+  // The exits used to live behind `status: "payment_failed"`, which meant an
+  // order the reconciler could never settle sat outside both of them — the
+  // same trap in a narrower doorway. An order at the cap must be released
+  // whatever status it is sitting in, or the cap is not a guarantee.
+  const stuckOrders = await prisma.order.findMany({
+    where: {
+      status: { in: ["payment_failed", "payment_pending"] },
+      paymentAttemptedAt: { lt: now },
+    },
     include: { window: true },
   });
-  for (const order of failedOrders) {
+  for (const order of stuckOrders) {
     try {
       // Two independent exits, and the second is the one that guarantees
       // termination. `paymentRetryCount` only counts ESTABLISHED failures, so
@@ -177,15 +221,20 @@ export async function runCycles(now: Date = new Date()): Promise<CycleRunResult>
         }
         continue;
       }
+
+      // Past this point we are deciding whether to CHARGE, and only a
+      // `payment_failed` order is eligible. A `payment_pending` one still has
+      // an attempt nobody has settled; charging it is the double charge.
+      if (order.status !== "payment_failed") continue;
+
       if (order.window.deliveryDate <= now) continue; // delivered already — leave for an admin
       recordOutcome(result, await attemptCharge(order.id, now));
     } catch (err) {
+      throwIfFatalConfig(err);
       result.errors++;
       console.error(`[cycle-run] retry for order ${order.id} threw:`, err);
     }
   }
-
-  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -417,9 +466,29 @@ async function reconcileInterruptedAttempts(
 
       const customerId = attempt.order.stripeCustomerId;
       if (!customerId) {
+        // Resolve rather than skip. Leaving it pending was its own trap: the
+        // order stays `payment_pending` for ever, outside every exit and
+        // uncancellable by the customer.
+        //
+        // And it is not a guess. We cannot charge without a customer id and no
+        // amount of reconciling will conjure one, so "this can never be paid"
+        // is established, not inferred. Nor can it lead to a double charge:
+        // the retry path needs the same missing id, so it fails the same way
+        // until the retry budget runs out and the order is released.
         console.error(
-          `[payments] attempt ${attempt.id} on order ${attempt.orderId} has no Stripe customer to reconcile against — left pending for manual review`
+          `[payments] attempt ${attempt.id} on order ${attempt.orderId} has no Stripe customer — it can never be charged, failing it`
         );
+        const applied = await resolveChargeOutcome({
+          attemptId: attempt.id,
+          orderId: attempt.orderId,
+          outcome: {
+            kind: "failed",
+            code: "no_stripe_customer",
+            message: "The order has no Stripe customer, so it can never be charged",
+          },
+          now,
+        });
+        if (applied === "resolved") result.reconciled++;
         continue;
       }
 
@@ -508,6 +577,7 @@ async function reconcileInterruptedAttempts(
       });
       if (applied === "resolved") result.reconciled++;
     } catch (err) {
+      throwIfFatalConfig(err);
       result.errors++;
       console.error(`[cycle-run] reconciling payment attempt ${attempt.id} threw:`, err);
     }
@@ -603,14 +673,30 @@ async function attemptCharge(orderId: string, now: Date): Promise<AttemptResult>
     return "claimedElsewhere";
   }
 
-  const outcome = await chargeOrder({
-    orderId,
-    attemptNumber,
-    amountPence: order.totalPence,
-    customerId: order.stripeCustomerId,
-    paymentMethodId: order.stripePaymentMethodId,
-    idempotencyKey,
-  });
+  let outcome: ChargeOutcome;
+  try {
+    outcome = await chargeOrder({
+      orderId,
+      attemptNumber,
+      amountPence: order.totalPence,
+      customerId: order.stripeCustomerId,
+      paymentMethodId: order.stripePaymentMethodId,
+      idempotencyKey,
+    });
+  } catch (err) {
+    // Broken credentials are rejected at Stripe's door, so we know for certain
+    // no PaymentIntent was created. Undo the write-ahead completely — the row
+    // exists to record that a charge MIGHT have been made, and here it
+    // certainly wasn't. A misconfigured deploy leaves no trace on the order.
+    if (err instanceof PaymentConfigurationError) {
+      await prisma.paymentAttempt.delete({ where: { id: attempt.id } });
+      await prisma.order.updateMany({
+        where: { id: orderId, status: "payment_pending" },
+        data: { status: priorStatus, paymentAttemptedAt: before.paymentAttemptedAt },
+      });
+    }
+    throw err;
+  }
 
   const applied = await resolveChargeOutcome({
     attemptId: attempt.id,

@@ -499,6 +499,66 @@ describe("reconciling an interrupted charge", () => {
     expect(chargedThisOrder(orderId)).toBe(false);
   });
 
+  // The exits used to sit behind `status: "payment_failed"`, so an order the
+  // reconciler could never settle stayed `payment_pending` — outside both caps
+  // and still uncancellable. The cap is only a guarantee if it reaches an order
+  // wherever it is sitting.
+  it("releases a payment_pending order that has hit the attempt cap", async () => {
+    const { orderId } = await strandedOrder({
+      attemptCreatedAt: new Date(NOW.getTime() - 24 * 60 * 60 * 1000),
+    });
+    // Fill up to the cap. Attempt 0 already exists from the fixture.
+    for (let n = 1; n < MAX_PAYMENT_ATTEMPTS; n++) {
+      await prisma.paymentAttempt.create({
+        data: {
+          orderId,
+          attemptNumber: n,
+          idempotencyKey: `order-${orderId}-attempt-${n}`,
+          status: "abandoned",
+          resolvedAt: NOW,
+        },
+      });
+    }
+    // Nothing the reconciler can conclude: Stripe refuses to answer at all.
+    vi.mocked(findIntentsForAttempt).mockImplementation(async (params) => {
+      if (params.orderId === orderId) throw new Error("cannot enumerate this customer");
+      return [];
+    });
+
+    const before = await prisma.order.findUniqueOrThrow({ where: { id: orderId } });
+    expect(before.status).toBe("payment_pending");
+    expect(before.paymentRetryCount).toBeLessThan(MAX_PAYMENT_RETRIES);
+
+    await runCycles(NOW);
+
+    const after = await prisma.order.findUniqueOrThrow({ where: { id: orderId } });
+    expect(after.status).toBe("cancelled");
+    expect(chargedThisOrder(orderId)).toBe(false);
+  });
+
+  // We can never charge without a customer id, and no amount of reconciling
+  // will conjure one — so "this can never be paid" is established, not
+  // inferred. Leaving it pending was its own trap.
+  it("resolves an attempt whose order has no Stripe customer, rather than hanging", async () => {
+    const { orderId, attemptId } = await strandedOrder({ attemptCreatedAt: STALE });
+    await prisma.order.update({ where: { id: orderId }, data: { stripeCustomerId: null } });
+
+    await runCycles(NOW);
+
+    const attempt = await prisma.paymentAttempt.findUniqueOrThrow({ where: { id: attemptId } });
+    expect(attempt.status).toBe("failed");
+    expect(attempt.errorCode).toBe("no_stripe_customer");
+    expect(attempt.resolvedAt).not.toBeNull();
+
+    const order = await prisma.order.findUniqueOrThrow({ where: { id: orderId } });
+    expect(order.status).toBe("payment_failed");
+    // An established failure, so it does spend a try — which is what carries
+    // the order to MAX_PAYMENT_RETRIES and out.
+    expect(order.paymentRetryCount).toBe(1);
+    // Stripe was never asked: there was no customer to ask about.
+    expect(lookedUpThisOrder(orderId)).toBe(false);
+  });
+
   // Reconciliation is idempotent: a second run finds nothing left pending, so
   // it must not re-adopt, re-refund, or re-increment anything.
   it("is idempotent across runs", async () => {

@@ -55,6 +55,44 @@ export async function createSetupIntent(customerId: string): Promise<{
   return { id: si.id, clientSecret: si.client_secret };
 }
 
+// Our own credentials are broken — a rotated, revoked or under-permissioned
+// API key. This is NOT a payment outcome and must never be recorded as one.
+//
+// It is also not the customer's problem, and treating it as a failed charge
+// would be actively destructive: `failed` spends one of their three tries, so
+// a botched deploy would burn every retry on every order and cancel the entire
+// order book within days. Worse, it is a fact about the run rather than about
+// any one order — if the key is wrong, nothing will work, so continuing to
+// iterate orders can only cause damage.
+//
+// So it is thrown, not returned: it aborts the whole run, having touched
+// nothing. A misconfigured deploy should do nothing rather than do harm.
+export class PaymentConfigurationError extends Error {
+  readonly code?: string;
+  constructor(message: string, code?: string) {
+    super(message);
+    this.name = "PaymentConfigurationError";
+    this.code = code;
+  }
+}
+
+// Rethrow a credentials failure as the fatal error, from anywhere a Stripe call
+// is made. Callers use this in their catch blocks so a run-level fault cannot
+// be swallowed by per-order error isolation.
+export function throwIfFatalConfig(err: unknown): void {
+  if (err instanceof PaymentConfigurationError) throw err;
+
+  if (
+    err instanceof Stripe.errors.StripeAuthenticationError ||
+    err instanceof Stripe.errors.StripePermissionError
+  ) {
+    throw new PaymentConfigurationError(
+      `Stripe rejected our credentials (${err.type}): ${err.message}`,
+      err.code
+    );
+  }
+}
+
 // What one charge attempt came to. `unknown` is the important one: the call
 // threw without Stripe telling us anything about a PaymentIntent, so the money
 // may or may not have moved. It is neither a success nor a failure and must
@@ -166,11 +204,13 @@ export function outcomeFromError(err: unknown): ChargeOutcome {
     return outcomeFromIntent(err.payment_intent);
   }
 
+  // Our credentials are wrong, not the customer's card. Nothing will work, so
+  // nothing should be attempted — see `PaymentConfigurationError`.
+  throwIfFatalConfig(err);
+
   const determined =
     err instanceof Stripe.errors.StripeCardError ||
-    err instanceof Stripe.errors.StripeInvalidRequestError ||
-    err instanceof Stripe.errors.StripeAuthenticationError ||
-    err instanceof Stripe.errors.StripePermissionError;
+    err instanceof Stripe.errors.StripeInvalidRequestError;
 
   if (determined) {
     const e = err as Stripe.errors.StripeError;
