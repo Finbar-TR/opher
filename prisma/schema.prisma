@@ -250,6 +250,19 @@ model PaymentAttempt {
   createdAt             DateTime  @default(now())
   resolvedAt            DateTime?
 
+  // Set when a reconciler run takes ownership of this attempt, so two
+  // overlapping cron runs cannot both refund the same duplicate charge. Left
+  // as a timestamp rather than a status so a run that dies mid-reconcile
+  // releases the attempt by staleness instead of stranding it in a state the
+  // sweep no longer selects.
+  reconcileStartedAt DateTime?
+
+  // A PaymentIntent Stripe confirmed as succeeded that arrived after this
+  // attempt had already been resolved some other way — so the money moved but
+  // no order records it. Written instead of being dropped, because it is the
+  // one thing a human needs to issue a refund. Query for non-null.
+  orphanedPaymentIntentId String?
+
   order Order @relation(fields: [orderId], references: [id])
 
   // Two runners racing the same attempt collide here; the loser stops.

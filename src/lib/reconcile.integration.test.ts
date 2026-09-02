@@ -3,6 +3,7 @@ import type Stripe from "stripe";
 import { prisma } from "./prisma";
 import { runCycles } from "./cycle-run";
 import { chargeOrder, findIntentsForAttempt, refundPaymentIntent } from "./payments";
+import { MAX_PAYMENT_ATTEMPTS, MAX_PAYMENT_RETRIES } from "./constants";
 
 // Reconciliation of interrupted charge attempts.
 //
@@ -34,6 +35,8 @@ const NOW = new Date("2026-12-10T08:00:00Z");
 const DELIVERY = new Date("2026-12-20T00:00:00Z");
 const CUTOFF = new Date("2026-12-17T08:00:00Z");
 
+const AT_CUTOFF = CUTOFF; // the moment the window locks and cards are charged
+
 const STALE = new Date(NOW.getTime() - 60 * 60 * 1000); // an hour ago — reconcilable
 const FRESH = new Date(NOW.getTime() - 60 * 1000); // a minute ago — still in flight
 
@@ -59,9 +62,12 @@ const chargedThisOrder = (orderId: string) =>
 const lookedUpThisOrder = (orderId: string) =>
   vi.mocked(findIntentsForAttempt).mock.calls.some(([params]) => params.orderId === orderId);
 
-// An order mid-charge: claimed, `payment_pending`, with a `pending` attempt row
-// whose age decides whether the reconciler considers it interrupted.
-async function strandedOrder(opts: { attemptCreatedAt: Date; retryCount?: number }) {
+// Everything an order needs to exist, in a city the window sweep ignores.
+async function fixture(orderData: {
+  status: string;
+  paymentAttemptedAt?: Date;
+  paymentRetryCount?: number;
+}) {
   const suffix = Math.random().toString(16).slice(2, 8);
   const city = await prisma.city.create({
     data: {
@@ -104,32 +110,58 @@ async function strandedOrder(opts: { attemptCreatedAt: Date; retryCount?: number
     data: {
       userId: user.id, basketId: basket.id, basketTierId: basket.tiers[0].id,
       deliveryWindowId: window.id,
-      status: "payment_pending",
+      status: orderData.status,
       stripeCustomerId: "cus_test", stripePaymentMethodId: "pm_test",
       debitDate: CUTOFF, cancellationDeadline: CUTOFF,
-      paymentAttemptedAt: opts.attemptCreatedAt,
-      paymentRetryCount: opts.retryCount ?? 0,
+      paymentAttemptedAt: orderData.paymentAttemptedAt ?? null,
+      paymentRetryCount: orderData.paymentRetryCount ?? 0,
       totalPence: 2200, deliveryAddress: "1 Test Street",
     },
   });
 
+  return { orderId: order.id };
+}
+
+// An order mid-charge: claimed, `payment_pending`, with a `pending` attempt row
+// whose age decides whether the reconciler considers it interrupted.
+async function strandedOrder(opts: { attemptCreatedAt: Date; retryCount?: number }) {
+  const { orderId } = await fixture({
+    status: "payment_pending",
+    paymentAttemptedAt: opts.attemptCreatedAt,
+    paymentRetryCount: opts.retryCount ?? 0,
+  });
+
   const attempt = await prisma.paymentAttempt.create({
     data: {
-      orderId: order.id,
+      orderId,
       attemptNumber: 0,
-      idempotencyKey: `order-${order.id}-attempt-0`,
+      idempotencyKey: `order-${orderId}-attempt-0`,
       status: "pending",
       createdAt: opts.attemptCreatedAt,
     },
   });
 
-  return { orderId: order.id, attemptId: attempt.id };
+  return { orderId, attemptId: attempt.id };
 }
 
+// An untouched order awaiting its cutoff, so the real charge protocol runs.
+const committedOrder = () => fixture({ status: "committed" });
+
+// An order the retry phase will pick up, for the termination cap.
+const failedOrder = (retryCount: number) =>
+  fixture({
+    status: "payment_failed",
+    paymentAttemptedAt: new Date(NOW.getTime() - 24 * 60 * 60 * 1000),
+    paymentRetryCount: retryCount,
+  });
+
+// Restored between tests, so one test's forced outcome cannot leak into the next.
+const realChargeOrder = (await vi.importActual<typeof import("./payments")>("./payments"))
+  .chargeOrder;
+
 beforeEach(() => {
-  // mockClear, not mockReset: the factory seeded chargeOrder with the real
-  // keyless implementation and these tests rely on it staying there.
-  vi.mocked(chargeOrder).mockClear();
+  vi.mocked(chargeOrder).mockReset();
+  vi.mocked(chargeOrder).mockImplementation(realChargeOrder);
   vi.mocked(findIntentsForAttempt).mockReset();
   vi.mocked(findIntentsForAttempt).mockResolvedValue([]);
   vi.mocked(refundPaymentIntent).mockReset();
@@ -303,6 +335,168 @@ describe("reconciling an interrupted charge", () => {
     const order = await prisma.order.findUniqueOrThrow({ where: { id: orderId } });
     expect(order.status).toBe("payment_pending");
     expect(order.paymentRetryCount).toBe(0);
+  });
+
+  // The two halves of the headline case, joined. Everything above starts from
+  // a hand-built stranded attempt; this one produces the strand by running the
+  // real charge protocol against a Stripe that dies mid-call, then reconciles
+  // whatever that actually left behind. It is the scenario the task exists for,
+  // demonstrated rather than inferred.
+  it("end to end: a charge that crashes mid-call is adopted, never repeated", async () => {
+    const { orderId } = await committedOrder();
+
+    // Phase 2 claims the order, writes the attempt, calls Stripe — and the
+    // process dies without an answer.
+    vi.mocked(chargeOrder).mockImplementation(async (params) => {
+      if (params.orderId !== orderId) return { kind: "unknown", message: "not under test" };
+      throw new Error("Vercel function timed out");
+    });
+    await runCycles(AT_CUTOFF);
+    vi.mocked(chargeOrder).mockClear();
+
+    // What the crash left: a claimed order and a pending attempt. Nothing that
+    // says whether the money moved.
+    const stranded = await prisma.paymentAttempt.findFirstOrThrow({ where: { orderId } });
+    expect(stranded.status).toBe("pending");
+    const midway = await prisma.order.findUniqueOrThrow({ where: { id: orderId } });
+    expect(midway.status).toBe("payment_pending");
+    expect(midway.paymentRetryCount).toBe(0);
+
+    // It had in fact reached Stripe, which charged the card.
+    stripeHolds(orderId, [intent("pi_crashed_but_charged", "succeeded")]);
+
+    // Age it past the staleness threshold, as the next day's run would find it.
+    await prisma.paymentAttempt.update({
+      where: { id: stranded.id },
+      data: { createdAt: new Date(AT_CUTOFF.getTime() - 60 * 60 * 1000) },
+    });
+    await runCycles(new Date(AT_CUTOFF.getTime() + 60 * 1000));
+
+    const order = await prisma.order.findUniqueOrThrow({ where: { id: orderId } });
+    expect(order.status).toBe("paid");
+    expect(order.stripePaymentIntentId).toBe("pi_crashed_but_charged");
+    expect(order.paymentRetryCount).toBe(0);
+    // The whole point: the card was never presented a second time.
+    expect(chargedThisOrder(orderId)).toBe(false);
+  });
+
+  // The termination guarantee. An order whose charge can never reach Stripe is
+  // abandoned every run, which correctly spends no retry — so MAX_PAYMENT_RETRIES
+  // never fires. Without a cap on TOTAL attempts the order is uncharged,
+  // unreleasable, and uncancellable (joins.ts refuses once paymentAttemptedAt is
+  // set): a customer with no exit. The cap is that exit.
+  it("releases an order once total attempts are exhausted, however they resolved", async () => {
+    const { orderId } = await failedOrder(0);
+
+    // Six attempts that all ended abandoned — Stripe holding nothing, every
+    // time — so the retry count never moved off zero.
+    for (let n = 0; n < MAX_PAYMENT_ATTEMPTS; n++) {
+      await prisma.paymentAttempt.create({
+        data: {
+          orderId,
+          attemptNumber: n,
+          idempotencyKey: `order-${orderId}-attempt-${n}`,
+          status: "abandoned",
+          resolvedAt: NOW,
+        },
+      });
+    }
+
+    const before = await prisma.order.findUniqueOrThrow({ where: { id: orderId } });
+    expect(before.paymentRetryCount).toBe(0); // the retry budget is untouched
+    expect(before.paymentRetryCount).toBeLessThan(MAX_PAYMENT_RETRIES);
+
+    await runCycles(NOW);
+
+    const after = await prisma.order.findUniqueOrThrow({ where: { id: orderId } });
+    expect(after.status).toBe("cancelled");
+    // Released without ever presenting the card again.
+    expect(chargedThisOrder(orderId)).toBe(false);
+  });
+
+  it("does not release an order that still has attempts left", async () => {
+    const { orderId } = await failedOrder(0);
+    for (let n = 0; n < MAX_PAYMENT_ATTEMPTS - 1; n++) {
+      await prisma.paymentAttempt.create({
+        data: {
+          orderId,
+          attemptNumber: n,
+          idempotencyKey: `order-${orderId}-attempt-${n}`,
+          status: "abandoned",
+          resolvedAt: NOW,
+        },
+      });
+    }
+
+    await runCycles(NOW);
+
+    const after = await prisma.order.findUniqueOrThrow({ where: { id: orderId } });
+    expect(after.status).not.toBe("cancelled");
+    // It got its next try instead, under a fresh attempt number.
+    expect(chargedThisOrder(orderId)).toBe(true);
+  });
+
+  // The cron route is a plain handler on GET and POST with no lock, so two
+  // runs can overlap. Ownership is taken before any Stripe work precisely so
+  // they cannot both reach the refund loop for the same duplicate charge.
+  it("skips an attempt another run has already claimed", async () => {
+    const { orderId, attemptId } = await strandedOrder({ attemptCreatedAt: STALE });
+    await prisma.paymentAttempt.update({
+      where: { id: attemptId },
+      data: { reconcileStartedAt: NOW }, // a run that started moments ago
+    });
+    stripeHolds(orderId, [intent("pi_x", "succeeded")]);
+
+    await runCycles(NOW);
+
+    // Not even looked up: the other run owns the decision, including the refund.
+    expect(lookedUpThisOrder(orderId)).toBe(false);
+    const attempt = await prisma.paymentAttempt.findUniqueOrThrow({ where: { id: attemptId } });
+    expect(attempt.status).toBe("pending");
+  });
+
+  it("reclaims an attempt whose reconciler died mid-sweep", async () => {
+    const { orderId, attemptId } = await strandedOrder({ attemptCreatedAt: STALE });
+    await prisma.paymentAttempt.update({
+      where: { id: attemptId },
+      // Claimed by a run that never finished — stale, so it is up for grabs.
+      data: { reconcileStartedAt: new Date(NOW.getTime() - 60 * 60 * 1000) },
+    });
+    stripeHolds(orderId, [intent("pi_recovered", "succeeded")]);
+
+    await runCycles(NOW);
+
+    const order = await prisma.order.findUniqueOrThrow({ where: { id: orderId } });
+    expect(order.status).toBe("paid");
+    expect(order.stripePaymentIntentId).toBe("pi_recovered");
+  });
+
+  // The claim has to be released exactly where it came from. Restoring a
+  // `payment_failed` order as `committed` would re-enter the cutoff phase
+  // carrying a non-zero retry count.
+  it("puts the order back in payment_failed when the attempt row cannot be opened", async () => {
+    const { orderId } = await failedOrder(1);
+    // Attempts 0 and 2 exist, so the next number computes to 2 (the count) and
+    // collides with the row already there.
+    for (const n of [0, 2]) {
+      await prisma.paymentAttempt.create({
+        data: {
+          orderId,
+          attemptNumber: n,
+          idempotencyKey: `order-${orderId}-attempt-${n}`,
+          status: "failed",
+          resolvedAt: NOW,
+        },
+      });
+    }
+
+    await runCycles(NOW);
+
+    const after = await prisma.order.findUniqueOrThrow({ where: { id: orderId } });
+    expect(after.status).toBe("payment_failed");
+    expect(after.paymentRetryCount).toBe(1);
+    // Nothing was charged: the runner stopped when it could not open an attempt.
+    expect(chargedThisOrder(orderId)).toBe(false);
   });
 
   // Reconciliation is idempotent: a second run finds nothing left pending, so

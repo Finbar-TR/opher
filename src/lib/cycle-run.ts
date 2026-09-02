@@ -2,12 +2,14 @@ import "server-only";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
 import {
+  MAX_PAYMENT_ATTEMPTS,
   MAX_PAYMENT_RETRIES,
   PAYMENT_LOOKBACK_HOURS,
   PAYMENT_RECONCILE_AFTER_MINUTES,
 } from "./constants";
 import { ensureOpenWindows } from "./windows";
 import {
+  cancelPaymentIntent,
   chargeOrder,
   findIntentsForAttempt,
   outcomeFromIntent,
@@ -153,9 +155,26 @@ export async function runCycles(now: Date = new Date()): Promise<CycleRunResult>
   });
   for (const order of failedOrders) {
     try {
-      if (order.paymentRetryCount >= MAX_PAYMENT_RETRIES) {
+      // Two independent exits, and the second is the one that guarantees
+      // termination. `paymentRetryCount` only counts ESTABLISHED failures, so
+      // an order whose charge can never reach Stripe at all — a payment method
+      // detached at Stripe, say — is abandoned by the reconciler every run,
+      // spends no retry, and would be retried for ever. It cannot be cancelled
+      // by the customer either: joins.ts refuses once `paymentAttemptedAt` is
+      // set, and it is set by the first claim. Capping TOTAL attempts however
+      // they resolved is what stops a customer being trapped with no exit.
+      const attemptCount = await prisma.paymentAttempt.count({ where: { orderId: order.id } });
+      const spentRetries = order.paymentRetryCount >= MAX_PAYMENT_RETRIES;
+      const spentAttempts = attemptCount >= MAX_PAYMENT_ATTEMPTS;
+
+      if (spentRetries || spentAttempts) {
         await prisma.order.update({ where: { id: order.id }, data: { status: "cancelled" } });
         result.released++;
+        if (spentAttempts && !spentRetries) {
+          console.error(
+            `[payments] order ${order.id} released after ${attemptCount} charge attempts that never produced a confirmed outcome (retry count ${order.paymentRetryCount}) — investigate the payment method, the customer was otherwise stuck`
+          );
+        }
         continue;
       }
       if (order.window.deliveryDate <= now) continue; // delivered already — leave for an admin
@@ -272,13 +291,30 @@ export async function resolveChargeOutcome(params: {
   outcome: ChargeOutcome | Abandonment;
   now: Date;
 }): Promise<AttemptResolution> {
-  const { attemptId, orderId, outcome, now } = params;
+  const { attemptId, orderId, now } = params;
+  let outcome = params.outcome;
 
   // `processing` (Stripe has the money in flight) and `unknown` (our call
   // threw and told us nothing) are neither success nor failure. Both leave the
   // attempt `pending` and the order `payment_pending`, untouched, for the
   // reconciler — writing anything here would be inventing an answer.
   if (outcome.kind === "processing" || outcome.kind === "unknown") return "left_pending";
+
+  // An intent sitting at `requires_action` is not dead, it is waiting. Left
+  // alone it could be authenticated hours later and succeed — after we had
+  // recorded a failure and charged again under the next attempt number, and
+  // after the webhook had stopped being able to act on it, because the attempt
+  // is no longer `pending`. Cancel it so it is established dead rather than
+  // inferred dead.
+  if (outcome.kind === "requires_action") {
+    const afterCancel = await cancelPaymentIntent(outcome.paymentIntentId);
+    // Only a success changes the story — the customer authenticated between
+    // our read and our cancel, so we adopt the payment rather than discard it.
+    // Any other answer leaves the `requires_action` resolution standing: it is
+    // the truthful record of why this attempt ended, and the intent is now
+    // confirmed dead rather than merely assumed so.
+    if (afterCancel?.kind === "succeeded") outcome = afterCancel;
+  }
 
   const plan = planFor(outcome, now);
 
@@ -287,7 +323,33 @@ export async function resolveChargeOutcome(params: {
       where: { id: attemptId, status: "pending" },
       data: plan.attempt,
     });
-    if (claimed.count === 0) return "already_resolved";
+    if (claimed.count === 0) {
+      // Someone else resolved this attempt first. Usually benign — a
+      // redelivered webhook, or the reconciler and the charge path meeting.
+      //
+      // But if what we are holding is an ESTABLISHED SUCCESS and the resolved
+      // row names a different intent (or none), then money moved and no row
+      // records it. That is exactly the "payment taken, nothing to refund
+      // against" shape this whole task exists to remove, and it is the one
+      // anomaly here that must not be silent. The likeliest way in: the
+      // reconciler abandons an attempt while the original call is still in
+      // flight, and that call then returns `succeeded`.
+      if (outcome.kind === "succeeded") {
+        const existing = await tx.paymentAttempt.findUnique({ where: { id: attemptId } });
+        if (existing && existing.stripePaymentIntentId !== outcome.paymentIntentId) {
+          await tx.paymentAttempt.update({
+            where: { id: attemptId },
+            data: { orphanedPaymentIntentId: outcome.paymentIntentId },
+          });
+          console.error(
+            `[payments] ORPHANED CHARGE: payment intent ${outcome.paymentIntentId} succeeded for order ${orderId}, but attempt ${attemptId} had already resolved as ${existing.status}` +
+              (existing.stripePaymentIntentId ? ` against ${existing.stripePaymentIntentId}` : "") +
+              " — money taken with no order recording it, REFUND MANUALLY"
+          );
+        }
+      }
+      return "already_resolved";
+    }
 
     // The order only ever moves out of `payment_pending`. Finding it anywhere
     // else means something outside this flow (an admin cancellation, a manual
@@ -333,6 +395,26 @@ async function reconcileInterruptedAttempts(
   // the rest of the sweep.
   for (const attempt of stale) {
     try {
+      // Take ownership BEFORE any Stripe work. The cron route is a plain
+      // handler on GET and POST with no lock, so two runs can overlap, read
+      // the same stale attempt, both see the same duplicate charge and both
+      // try to refund it. Claiming here is what makes the refund loop below
+      // single-writer; `refundPaymentIntent`'s idempotency key is the second
+      // line of defence, not the first.
+      //
+      // A timestamp rather than a status, so a run that dies mid-reconcile
+      // releases the attempt by staleness instead of stranding it somewhere
+      // the sweep no longer looks.
+      const owned = await prisma.paymentAttempt.updateMany({
+        where: {
+          id: attempt.id,
+          status: "pending",
+          OR: [{ reconcileStartedAt: null }, { reconcileStartedAt: { lt: staleBefore } }],
+        },
+        data: { reconcileStartedAt: now },
+      });
+      if (owned.count === 0) continue; // another run owns it
+
       const customerId = attempt.order.stripeCustomerId;
       if (!customerId) {
         console.error(
@@ -451,20 +533,38 @@ async function reconcileInterruptedAttempts(
 // only `status` would let an overlapping run reclaim a charge still
 // legitimately in flight.
 async function attemptCharge(orderId: string, now: Date): Promise<AttemptResult> {
-  // Read first, so a claim that has to be released can be put back exactly as
-  // it was rather than guessed at.
+  // Read first, so a claim that has to be released can be put back with the
+  // timestamp it had rather than a guessed one.
   const before = await prisma.order.findUnique({ where: { id: orderId } });
   if (!before) return "claimedElsewhere";
 
-  const claimed = await prisma.order.updateMany({
-    where: { id: orderId, status: { in: ["committed", "payment_failed"] } },
-    data: { status: "payment_pending", paymentAttemptedAt: now },
+  // Claim from each status separately rather than with one `in` filter. A
+  // single `updateMany` reports how many rows it moved but not which status
+  // they came from, and the release path below has to put the order back
+  // exactly where it was: restoring a `payment_failed` order as `committed`
+  // would re-enter the cutoff phase carrying a non-zero retry count.
+  const claim = { status: "payment_pending", paymentAttemptedAt: now };
+  let priorStatus = "committed";
+  let claimed = await prisma.order.updateMany({
+    where: { id: orderId, status: "committed" },
+    data: claim,
   });
+  if (claimed.count === 0) {
+    claimed = await prisma.order.updateMany({
+      where: { id: orderId, status: "payment_failed" },
+      data: claim,
+    });
+    priorStatus = "payment_failed";
+  }
   if (claimed.count === 0) return "claimedElsewhere";
+
+  // Re-read now the claim is held: this is the authoritative state to charge
+  // from, and nothing else can move it while we own it.
+  const order = await prisma.order.findUniqueOrThrow({ where: { id: orderId } });
 
   // No saved card. This is established without calling Stripe at all, so there
   // is nothing to reconcile later and no attempt row to write.
-  if (!before.stripeCustomerId || !before.stripePaymentMethodId) {
+  if (!order.stripeCustomerId || !order.stripePaymentMethodId) {
     await prisma.order.update({
       where: { id: orderId },
       data: {
@@ -497,10 +597,7 @@ async function attemptCharge(orderId: string, now: Date): Promise<AttemptResult>
     // reconciler, which only ever looks at attempts.
     await prisma.order.updateMany({
       where: { id: orderId, status: "payment_pending" },
-      data: {
-        status: before.status === "payment_failed" ? "payment_failed" : "committed",
-        paymentAttemptedAt: before.paymentAttemptedAt,
-      },
+      data: { status: priorStatus, paymentAttemptedAt: before.paymentAttemptedAt },
     });
     console.error(`[payments] could not open attempt ${attemptNumber} for order ${orderId}:`, err);
     return "claimedElsewhere";
@@ -509,9 +606,9 @@ async function attemptCharge(orderId: string, now: Date): Promise<AttemptResult>
   const outcome = await chargeOrder({
     orderId,
     attemptNumber,
-    amountPence: before.totalPence,
-    customerId: before.stripeCustomerId,
-    paymentMethodId: before.stripePaymentMethodId,
+    amountPence: order.totalPence,
+    customerId: order.stripeCustomerId,
+    paymentMethodId: order.stripePaymentMethodId,
     idempotencyKey,
   });
 

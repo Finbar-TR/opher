@@ -87,11 +87,33 @@ export const DEFAULT_CUTOFF_DAYS = 3; // joins close 3 days before delivery
 // the next delivery and the one after it.
 export const OPEN_WINDOWS_AHEAD = 2;
 
-// Charge attempts before an order is released.
+// Established charge failures before an order is released. Only an outcome
+// Stripe actually confirmed increments the count this bounds.
 export const MAX_PAYMENT_RETRIES = 3;
+
+// The termination guarantee. `MAX_PAYMENT_RETRIES` alone cannot end the loop:
+// an attempt that is abandoned or left undetermined deliberately spends no
+// retry, so an order whose charge can never reach Stripe would be retried for
+// ever — and it cannot be cancelled by the customer either, because joins.ts
+// refuses once `paymentAttemptedAt` is set. This caps TOTAL attempts however
+// they resolved, so every order reaches an exit.
+export const MAX_PAYMENT_ATTEMPTS = 6;
+
+// The cron's Vercel function timeout, in seconds. It lives here rather than as
+// a literal in the route because PAYMENT_RECONCILE_AFTER_MINUTES below must
+// stay comfortably larger than it — see the note there.
+export const CRON_MAX_DURATION_SECONDS = 300;
 
 // A charge attempt still `pending` after this long is presumed interrupted and
 // is reconciled against Stripe. Not a retry delay — a staleness threshold.
+//
+// MUST stay comfortably greater than CRON_MAX_DURATION_SECONDS above. The
+// runtime kills a run at that timeout, so an attempt cannot still be genuinely
+// in flight once this has elapsed. If this were the shorter of the two, a
+// reconciler could race a charge call that is still running, decide from
+// Stripe's "nothing here yet" that no charge exists, and authorise a second
+// one. `constants.test.ts` asserts the relationship rather than trusting this
+// comment.
 export const PAYMENT_RECONCILE_AFTER_MINUTES = 10;
 
 // How far back to look when searching Stripe for an orphaned PaymentIntent.

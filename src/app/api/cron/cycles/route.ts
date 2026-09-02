@@ -3,8 +3,16 @@ import { runCycles } from "@/lib/cycle-run";
 
 // The run is fully sequential with a Stripe round-trip per order, so Vercel's
 // default function timeout is not enough headroom on a city with any real
-// volume — and a timeout mid-run is the likeliest way to strand an order in
-// payment_pending, which is exactly what the phase 3 recovery step exists for.
+// volume — and a timeout mid-run is the likeliest way to strand an order
+// mid-charge, which is exactly what the reconciler exists for.
+//
+// RAISING THIS IS NOT A LOCAL DECISION. It must stay comfortably BELOW
+// PAYMENT_RECONCILE_AFTER_MINUTES (src/lib/constants.ts): the reconciler
+// treats an attempt older than that as interrupted, so if a run could still be
+// alive at that age, a reconciler could race a charge call that is still in
+// flight and authorise a second one. `constants.test.ts` asserts the
+// relationship. Next requires a literal here, so the value is duplicated from
+// CRON_MAX_DURATION_SECONDS and the test checks the two agree.
 export const maxDuration = 300;
 
 // The daily cutoff run. Protect with CRON_SECRET and call at 08:00 UTC with

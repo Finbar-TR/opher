@@ -140,19 +140,49 @@ export async function chargeOrder(params: {
     );
     return outcomeFromIntent(pi);
   } catch (err) {
-    // A Stripe API error carries the PaymentIntent it acted on — a decline, an
-    // off-session authentication requirement. That IS Stripe's answer, so it
-    // goes through the same mapping as a returned intent rather than being
-    // hand-assembled into a "failed". A network error carries no intent: it is
-    // genuinely undetermined and must NOT be treated as a failure.
-    if (err instanceof Stripe.errors.StripeError && err.payment_intent) {
-      return outcomeFromIntent(err.payment_intent);
-    }
-    return {
-      kind: "unknown",
-      message: err instanceof Error ? err.message : "Charge outcome unknown",
-    };
+    return outcomeFromError(err);
   }
+}
+
+// Classify a thrown charge error. The only question that matters: could this
+// error have left a PaymentIntent behind at Stripe?
+//
+//   * If Stripe handed back the intent it acted on, that IS its answer, and it
+//     goes through `outcomeFromIntent` like any other intent rather than being
+//     hand-assembled into a failure.
+//   * If Stripe answered definitively that the request could not succeed —
+//     malformed params, a payment method that no longer exists, a rejected key
+//     — then no intent exists and the failure is ESTABLISHED. Calling that
+//     `unknown` was its own trap: the reconciler would find nothing at Stripe,
+//     abandon the attempt without spending a retry, and the order would be
+//     re-attempted for ever while staying uncancellable.
+//   * Anything else — a dropped socket, a timeout, a 500 from Stripe, a reused
+//     idempotency key that may name an earlier intent — is genuinely
+//     undetermined and must stay `unknown`. When in doubt, it is `unknown`:
+//     the cost of that is a delay, and the cost of guessing wrong is a double
+//     charge.
+export function outcomeFromError(err: unknown): ChargeOutcome {
+  if (err instanceof Stripe.errors.StripeError && err.payment_intent) {
+    return outcomeFromIntent(err.payment_intent);
+  }
+
+  const determined =
+    err instanceof Stripe.errors.StripeCardError ||
+    err instanceof Stripe.errors.StripeInvalidRequestError ||
+    err instanceof Stripe.errors.StripeAuthenticationError ||
+    err instanceof Stripe.errors.StripePermissionError;
+
+  if (determined) {
+    const e = err as Stripe.errors.StripeError;
+    return { kind: "failed", code: e.code, message: e.message };
+  }
+
+  // StripeAPIError (Stripe's own 500), StripeConnectionError, StripeRateLimitError
+  // and StripeIdempotencyError all land here, along with anything non-Stripe.
+  return {
+    kind: "unknown",
+    message: err instanceof Error ? err.message : "Charge outcome unknown",
+  };
 }
 
 // Find the PaymentIntents Stripe holds for one order attempt.
@@ -205,9 +235,42 @@ export async function findIntentsForAttempt(params: {
   );
 }
 
+// The idempotency key is keyed on the intent, not the call site: two
+// overlapping cron runs that both decide to refund the same duplicate charge
+// collapse into one refund at Stripe instead of two. Without it the second
+// caller either refunds again or errors, and an error here is reported as
+// "refund manually" — the opposite of what happened.
 export async function refundPaymentIntent(paymentIntentId: string): Promise<void> {
   if (!stripe) return;
-  await stripe.refunds.create({ payment_intent: paymentIntentId });
+  await stripe.refunds.create(
+    { payment_intent: paymentIntentId },
+    { idempotencyKey: `refund-${paymentIntentId}` }
+  );
+}
+
+// Cancel an intent we are giving up on, and report what Stripe says it became.
+//
+// An intent left at `requires_action` is still alive: the customer could
+// authenticate hours later and it would succeed, after we had already recorded
+// a failure and charged again under the next attempt. Cancelling makes it
+// established dead rather than inferred dead.
+//
+// If cancelling fails because the intent has meanwhile succeeded, Stripe hands
+// back the intent in the error and this returns that success, so the caller
+// adopts it instead of discarding it.
+export async function cancelPaymentIntent(paymentIntentId: string): Promise<ChargeOutcome | null> {
+  if (!stripe) return null;
+  try {
+    return outcomeFromIntent(await stripe.paymentIntents.cancel(paymentIntentId));
+  } catch (err) {
+    if (err instanceof Stripe.errors.StripeError && err.payment_intent) {
+      return outcomeFromIntent(err.payment_intent);
+    }
+    // Could not establish anything. The caller keeps its original resolution;
+    // null says "no better information", not "cancelled".
+    console.error(`[payments] could not cancel payment intent ${paymentIntentId}:`, err);
+    return null;
+  }
 }
 
 // Detaching removes the saved card from the customer. Callers must first check
