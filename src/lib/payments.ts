@@ -56,22 +56,32 @@ export async function createSetupIntent(customerId: string): Promise<{
 
 // Charge a saved card with nobody present. Failures are returned, not thrown —
 // the cron records them as payment_failed and retries.
+//
+// `idempotencyKey` should be stable per order per attempt (e.g.
+// `order-<id>-attempt-<retryCount>`), so a retry of the *same* attempt — a
+// crash-and-recover, or a network timeout whose request may have already
+// landed at Stripe — collapses into the original PaymentIntent instead of
+// creating a second one, while a genuine next attempt gets a fresh key.
 export async function chargeOrder(params: {
   amountPence: number;
   customerId: string;
   paymentMethodId: string;
+  idempotencyKey?: string;
 }): Promise<{ ok: true; paymentIntentId: string } | { ok: false; error: string }> {
   if (!stripe) return { ok: true, paymentIntentId: devId("dev_pi") };
 
   try {
-    const pi = await stripe.paymentIntents.create({
-      amount: params.amountPence,
-      currency: "gbp",
-      customer: params.customerId,
-      payment_method: params.paymentMethodId,
-      confirm: true,
-      off_session: true,
-    });
+    const pi = await stripe.paymentIntents.create(
+      {
+        amount: params.amountPence,
+        currency: "gbp",
+        customer: params.customerId,
+        payment_method: params.paymentMethodId,
+        confirm: true,
+        off_session: true,
+      },
+      params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : undefined
+    );
     return { ok: true, paymentIntentId: pi.id };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "Charge failed" };

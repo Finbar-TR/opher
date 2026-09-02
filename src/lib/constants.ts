@@ -89,3 +89,9 @@ export const OPEN_WINDOWS_AHEAD = 2;
 
 // Charge attempts before an order is released.
 export const MAX_PAYMENT_RETRIES = 3;
+
+// Minutes a `payment_pending` order may sit unresolved before the next cron
+// run treats it as an interrupted charge (the process died between claiming
+// the order and Stripe replying) rather than one still legitimately in
+// flight, and reconciles it.
+export const PAYMENT_PENDING_RECOVERY_MINUTES = 15;
