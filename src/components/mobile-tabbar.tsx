@@ -3,12 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-const TABS = [
-  { href: "/", label: "Home" },
-  { href: "/catalog", label: "Catalog" },
-  { href: "/baskets", label: "Baskets" },
-  { href: "/orders", label: "Orders" },
-];
+const TABS = [{ href: "/", label: "Home" }];
 
 // Fixed bottom navigation on phones only (hidden at sm+). Active tab in tomato.
 export function MobileTabBar() {

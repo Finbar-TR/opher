@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { stripe } from "@/lib/stripe";
-import { markPaymentPaid } from "@/lib/orders";
 
-// Stripe posts payment confirmations here. Verifies the signature, then marks the
-// corresponding share paid (which settles the order once all shares are in).
+// Stripe posts events here. Verifies the signature, then dispatches by event
+// type. The SetupIntent case (deferred card capture) is added in Task 7.
 export async function POST(req: NextRequest) {
   const secret = process.env.STRIPE_WEBHOOK_SECRET;
   if (!stripe || !secret) {
@@ -23,17 +22,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid signature" }, { status: 400 });
   }
 
-  if (event.type === "checkout.session.completed") {
-    const session = event.data.object as {
-      metadata?: { paymentId?: string };
-      payment_intent?: string | { id: string } | null;
-    };
-    const paymentId = session.metadata?.paymentId;
-    const pi =
-      typeof session.payment_intent === "string"
-        ? session.payment_intent
-        : session.payment_intent?.id;
-    if (paymentId) await markPaymentPaid(paymentId, pi);
+  switch (event.type) {
+    default:
+      console.log(`Unhandled Stripe event: ${event.type}`);
   }
 
   return NextResponse.json({ received: true });

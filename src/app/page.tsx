@@ -20,10 +20,10 @@ export default async function HomePage() {
             price without buying a whole sack alone.
           </p>
           <div className="mt-7 flex flex-wrap gap-3">
-            <Link href={user ? "/catalog" : "/sign-up"} className="btn-primary">
+            <Link href={user ? "/" : "/sign-up"} className="btn-primary">
               Get started
             </Link>
-            <Link href="/catalog" className="btn-secondary">
+            <Link href="/" className="btn-secondary">
               See what&apos;s available
             </Link>
           </div>
