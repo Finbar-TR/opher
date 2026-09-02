@@ -1,5 +1,5 @@
-// Delivery-address helpers. A member must have a usable address before claiming a
-// portion, so every order the merge engine produces is shippable.
+// Delivery-address helpers. A member must have a usable address before joining a
+// basket, so every order in a window is shippable when it is charged.
 
 export type AddressFields = {
   addrLine1: string | null;

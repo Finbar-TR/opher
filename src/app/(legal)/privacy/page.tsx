@@ -4,7 +4,7 @@ export const metadata = { title: "Privacy Policy — Opher" };
 
 export default function PrivacyPage() {
   return (
-    <LegalPage title="Privacy Policy" updated="17 August 2026">
+    <LegalPage title="Privacy Policy" updated="2 September 2026">
       <p>
         Opher (&quot;we&quot;) processes personal data to run a group food-buying
         service. This policy explains what we collect and your rights under UK GDPR.
@@ -12,14 +12,18 @@ export default function PrivacyPage() {
       <h2>What we collect</h2>
       <ul className="list-disc pl-5">
         <li>Account details: name, email, password (stored hashed).</li>
-        <li>Delivery details: address and phone, used to deliver your food share.</li>
-        <li>Order and payment records (card data is handled by Stripe, not by us).</li>
+        <li>Delivery details: address and phone, used to deliver your order.</li>
+        <li>
+          Order and payment records. Card data is handled by Stripe, not by us: when
+          you join a basket your card is saved with Stripe so it can be charged when
+          the basket closes, and we hold only Stripe&apos;s references to it.
+        </li>
       </ul>
       <h2>Why we use it</h2>
       <p>
-        To operate baskets and orders, take payment for your share, arrange delivery,
-        and send you transactional emails about your orders. Our lawful bases are
-        contract performance and legitimate interests.
+        To operate baskets and orders, take payment for your order when your basket
+        closes, arrange delivery, and send you transactional emails about your
+        orders. Our lawful bases are contract performance and legitimate interests.
       </p>
       <h2>Sharing</h2>
       <p>

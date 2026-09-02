@@ -16,7 +16,7 @@ const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"]
 export const metadata: Metadata = {
   title: "Opher — bulk-buy food together",
   description:
-    "Create food baskets, invite others, and merge them into whole bulk units for cheaper group buying across the UK.",
+    "Join a food basket in your city, pay the bulk price, and get a fortnightly delivery. Free to cancel until your basket closes.",
   manifest: "/manifest.webmanifest",
   appleWebApp: { capable: true, title: "Opher", statusBarStyle: "default" },
   icons: {

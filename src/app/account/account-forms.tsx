@@ -42,8 +42,8 @@ export function ProfileForm({ initial }: { initial: Profile }) {
     <form action={action} className="card space-y-4">
       <h2 className="text-lg font-semibold text-ink">Profile & delivery address</h2>
       <p className="text-sm text-muted">
-        A full address and phone number are required before you can claim portions —
-        it&apos;s where your share gets delivered.
+        A full address and phone number are required before you can join a basket —
+        it&apos;s where your order gets delivered.
       </p>
 
       <div>
