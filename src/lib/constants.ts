@@ -90,8 +90,21 @@ export const OPEN_WINDOWS_AHEAD = 2;
 // Charge attempts before an order is released.
 export const MAX_PAYMENT_RETRIES = 3;
 
-// Minutes a `payment_pending` order may sit unresolved before the next cron
-// run treats it as an interrupted charge (the process died between claiming
-// the order and Stripe replying) rather than one still legitimately in
-// flight, and reconciles it.
-export const PAYMENT_PENDING_RECOVERY_MINUTES = 15;
+// A charge attempt still `pending` after this long is presumed interrupted and
+// is reconciled against Stripe. Not a retry delay — a staleness threshold.
+export const PAYMENT_RECONCILE_AFTER_MINUTES = 10;
+
+// How far back to look when searching Stripe for an orphaned PaymentIntent.
+// Generous: a missed cron day must not put the intent out of range. It is a
+// floor, not a ceiling — the reconciler always widens the window to cover the
+// attempt's own creation time, so an attempt older than this is still found.
+export const PAYMENT_LOOKBACK_HOURS = 48;
+
+export const PAYMENT_ATTEMPT_STATUSES = [
+  "pending",
+  "succeeded",
+  "failed",
+  "requires_action",
+  "abandoned",
+] as const;
+export type PaymentAttemptStatus = (typeof PAYMENT_ATTEMPT_STATUSES)[number];

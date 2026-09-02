@@ -218,14 +218,44 @@ model Order {
   referrerOrderId       String? // schema-ready; unused this milestone
   createdAt             DateTime  @default(now())
 
-  user   User            @relation(fields: [userId], references: [id])
-  basket Basket          @relation(fields: [basketId], references: [id])
-  tier   BasketTier      @relation(fields: [basketTierId], references: [id])
-  window DeliveryWindow  @relation(fields: [deliveryWindowId], references: [id])
-  events DeliveryEvent[]
+  user     User             @relation(fields: [userId], references: [id])
+  basket   Basket           @relation(fields: [basketId], references: [id])
+  tier     BasketTier       @relation(fields: [basketTierId], references: [id])
+  window   DeliveryWindow   @relation(fields: [deliveryWindowId], references: [id])
+  events   DeliveryEvent[]
+  attempts PaymentAttempt[]
 
   // One join per person per basket per cycle. To take more, pick a larger tier.
   @@unique([userId, basketId, deliveryWindowId])
+}
+
+// One charge attempt against one order. Written BEFORE the Stripe call, so a
+// crashed run always leaves evidence that a charge may have been made. The
+// Order columns alone cannot express "we called Stripe and don't know what
+// happened", which is the state that caused a double charge.
+//
+// `attemptNumber` counts attempts, and is deliberately NOT the order's
+// `paymentRetryCount`: the retry count is the customer's budget of three tries
+// and is not incremented for an undetermined outcome, so it cannot also serve
+// as the source of a fresh idempotency key.
+model PaymentAttempt {
+  id                    String    @id @default(cuid())
+  orderId               String
+  attemptNumber         Int
+  idempotencyKey        String    @unique
+  stripePaymentIntentId String?
+  status                String    @default("pending") // pending|succeeded|failed|requires_action|abandoned
+  errorCode             String?
+  errorMessage          String?
+  createdAt             DateTime  @default(now())
+  resolvedAt            DateTime?
+
+  order Order @relation(fields: [orderId], references: [id])
+
+  // Two runners racing the same attempt collide here; the loser stops.
+  @@unique([orderId, attemptNumber])
+  // The reconciler's sweep: pending attempts older than a threshold.
+  @@index([status, createdAt])
 }
 
 // Operator-driven delivery status update, shown to members as a timeline.
