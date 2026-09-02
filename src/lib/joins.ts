@@ -41,50 +41,62 @@ export async function joinBasket(params: JoinParams): Promise<{ orderId: string 
     throw new Error("Joining is closed for this delivery. Check back for the next one.");
   }
 
-  const existing = await prisma.order.findUnique({
-    where: {
-      userId_basketId_deliveryWindowId: {
-        userId: params.userId,
-        basketId: basket.id,
-        deliveryWindowId: window.id,
-      },
-    },
-  });
-  if (existing && existing.status !== "cancelled") {
-    throw new Error("You've already joined this basket for this delivery.");
-  }
+  // The window can still lock between this read and the write below — the
+  // cutoff cron (Task 8) flips windows to `locked` with nothing in between to
+  // stop a join from landing after it. Re-verify inside the transaction,
+  // immediately before writing, so a request that raced the lock is refused
+  // rather than committed against a cycle that has already been decided.
+  const order = await prisma.$transaction(async (tx) => {
+    const stillOpen = await tx.deliveryWindow.findUnique({ where: { id: window.id } });
+    if (!stillOpen || stillOpen.status !== "open") {
+      throw new Error("Joining is closed for this delivery. Check back for the next one.");
+    }
 
-  const fields = {
-    basketTierId: tier.id,
-    status: "committed",
-    stripeCustomerId: params.stripeCustomerId,
-    stripeSetupIntentId: params.setupIntentId,
-    stripePaymentMethodId: params.paymentMethodId,
-    // Both derive from the window's cutoff: one date, not two.
-    debitDate: window.cutoffAt,
-    cancellationDeadline: window.cutoffAt,
-    totalPence: tier.pricePence, // snapshot, so later price edits don't apply
-    deliveryAddress: params.deliveryAddress,
-    utmSource: params.utm?.source ?? null,
-    utmMedium: params.utm?.medium ?? null,
-    utmCampaign: params.utm?.campaign ?? null,
-  };
-
-  // Someone who cancelled and changed their mind reuses their existing row —
-  // the unique key on (user, basket, window) means a second insert would fail.
-  const order = existing
-    ? await prisma.order.update({
-        where: { id: existing.id },
-        data: { ...fields, paymentAttemptedAt: null, paymentRetryCount: 0 },
-      })
-    : await prisma.order.create({
-        data: {
+    const existing = await tx.order.findUnique({
+      where: {
+        userId_basketId_deliveryWindowId: {
           userId: params.userId,
           basketId: basket.id,
           deliveryWindowId: window.id,
-          ...fields,
         },
-      });
+      },
+    });
+    if (existing && existing.status !== "cancelled") {
+      throw new Error("You've already joined this basket for this delivery.");
+    }
+
+    const fields = {
+      basketTierId: tier.id,
+      status: "committed",
+      stripeCustomerId: params.stripeCustomerId,
+      stripeSetupIntentId: params.setupIntentId,
+      stripePaymentMethodId: params.paymentMethodId,
+      // Both derive from the window's cutoff: one date, not two.
+      debitDate: window.cutoffAt,
+      cancellationDeadline: window.cutoffAt,
+      totalPence: tier.pricePence, // snapshot, so later price edits don't apply
+      deliveryAddress: params.deliveryAddress,
+      utmSource: params.utm?.source ?? null,
+      utmMedium: params.utm?.medium ?? null,
+      utmCampaign: params.utm?.campaign ?? null,
+    };
+
+    // Someone who cancelled and changed their mind reuses their existing row —
+    // the unique key on (user, basket, window) means a second insert would fail.
+    return existing
+      ? await tx.order.update({
+          where: { id: existing.id },
+          data: { ...fields, paymentAttemptedAt: null, paymentRetryCount: 0 },
+        })
+      : await tx.order.create({
+          data: {
+            userId: params.userId,
+            basketId: basket.id,
+            deliveryWindowId: window.id,
+            ...fields,
+          },
+        });
+  });
 
   return { orderId: order.id };
 }

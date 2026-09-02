@@ -4,7 +4,8 @@ import { stripe } from "@/lib/stripe";
 import { reconcileSetupIntent } from "@/lib/joins";
 
 // Stripe posts events here. Verifies the signature, then dispatches by event
-// type. The SetupIntent case (deferred card capture) is added in Task 7.
+// type. setup_intent.succeeded reconciles a saved card against an order the
+// join request already created — it never creates an order itself.
 export async function POST(req: NextRequest) {
   const secret = process.env.STRIPE_WEBHOOK_SECRET;
   if (!stripe || !secret) {

@@ -110,6 +110,24 @@ describe("joinBasket", () => {
     await expect(joinBasket({ ...joinArgs(), userId: other.id })).rejects.toThrow(/closed/i);
     await prisma.deliveryWindow.update({ where: { id: openWindowId }, data: { status: "open" } });
   });
+
+  it("refuses when the only candidate window is locked, and leaves no order row behind", async () => {
+    // Simulates the cutoff cron (Task 8) winning the race and locking the
+    // window between the initial read and the transactional write: with
+    // openWindowId taken out of contention, lockedWindowId — locked since
+    // creation, not flipped mid-test — is the only window left for the city.
+    const other = await prisma.user.create({ data: { email: `${TAG}-race@test`, name: "Race", passwordHash: "x" } });
+    await prisma.deliveryWindow.update({ where: { id: openWindowId }, data: { status: "locked" } });
+    await expect(joinBasket({ ...joinArgs(), userId: other.id })).rejects.toThrow(/closed/i);
+
+    const order = await prisma.order.findFirst({ where: { basketId, userId: other.id } });
+    expect(order).toBeNull();
+
+    const stillLocked = await prisma.deliveryWindow.findUniqueOrThrow({ where: { id: lockedWindowId } });
+    expect(stillLocked.status).toBe("locked");
+
+    await prisma.deliveryWindow.update({ where: { id: openWindowId }, data: { status: "open" } });
+  });
 });
 
 describe("cancelOrder", () => {
