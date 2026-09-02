@@ -1,11 +1,120 @@
 # Platform-Scheduled Baskets — Design
 
-Date: 2026-09-02 (revision 2)
-Status: Approved for planning
+Date: 2026-09-02 (revision 5)
+Status: Approved; in execution
+
+**Read the revision notes below before §1.** Revisions 3–5 narrowed this design
+substantially — supply chain runs by hand, the demand threshold is gone, and
+thin windows roll over. Sections 1, 2, 5 and 9 were written before those
+changes; where they describe a threshold gate or automated purchasing, the
+revision notes govern.
 Supersedes: the user-organised basket model currently in `main`
 
-Revision 2 replaces the per-basket delivery schedule with a city-level one and
-moves the card charge from 24 hours before delivery to the join cutoff. See §5.
+Revision 2 replaced the per-basket delivery schedule with a city-level one and
+moved the card charge from 24 hours before delivery to the join cutoff. See §5.
+
+**Revision 3 — join-and-pay first; supply chain runs manually at launch.** The
+customer-facing flow ships and is run first. Supply chain stays in the design
+but is **operated by hand** rather than automated, so none of its machinery is
+built this milestone.
+
+*Not automated this milestone:* automatic `PurchaseOrder` creation,
+`stockAt3pl` tracking, `leadTimeDays`, the supply-feasibility half of the cutoff
+decision (§5.3), replenishment buys, reorder points, and the 3PL integration.
+The `Sku` stock columns and the `PurchaseOrder` model **stay in the schema,
+unused** — deleting and re-adding them would be churn, and they return intact
+when the automation does.
+
+*Done by hand instead:* when a cycle confirms, the operator reads what it needs
+and places the order with the supplier directly — email, phone, spreadsheet.
+The system's only job is to tell them what to buy. That readout is therefore
+**in scope**: a list of confirmed cycles showing city, food, delivery date and
+kilograms demanded, enough to act on without opening the database. Nothing
+writes `PurchaseOrder` rows; the operator's own records are the source of truth
+until the automation lands.
+
+**Revision 4 — there is no minimum. The threshold gate is removed.**
+
+Two joiners in a city are supplied just as ten are. A cycle therefore never
+fails for want of demand, and **every committed order is charged at its
+cutoff**. This removes the last of §5 rather than deferring it: no threshold
+comparison, no confirmed/failed outcome, no `DemandSnapshot` decision, no
+purchase trigger. `Sku.purchaseThresholdGrams` stays as an unused column.
+
+The cutoff run reduces to: lock the window, charge every committed order in it,
+retry what fails. There is no per-basket decision left to make, so the run
+iterates windows rather than baskets.
+
+**This changes what we may tell customers.** Any copy implying they might not be
+charged is now false and must not ship. Specifically, §9.2's "if the basket
+doesn't fill, you pay nothing" is **withdrawn**, along with "Building demand —
+[X]% there". The confirm-step disclosure keeps the delivery date, the charge
+date and free cancellation until then, and says nothing about a minimum:
+
+```
+Delivery: Saturday 18 October
+Your card will be charged on: Wednesday 15 October
+Cancel free until then
+```
+
+The demand bar (§9.1) loses its target and its percentage — a progress bar
+with no threshold behind it would imply a gate that does not exist. It becomes
+plain social proof: kilograms joined and how many neighbours have joined, with
+no bar, no target, and no language about confirming or filling. `demandedGrams`
+survives to feed that display and the operator's what-to-buy readout.
+
+**Revision 5 — thin windows roll over; they are never cancelled.**
+
+A window whose demand is too thin to be worth a delivery run is not cancelled.
+The operator **rolls it over**: every committed order moves to that city's next
+open window, and the joiners are told. Nobody is dropped and nobody is charged
+for the delivery that didn't run — their spot simply moves.
+
+*The decision is manual this milestone.* The operator judges thinness from the
+demand readout and pulls the lever. Automating it — a rule that rolls a window
+over below some figure — comes later, and the schema below is shaped so that
+automation replaces the trigger without touching the mechanics.
+
+**Timing is the binding constraint.** The cutoff is the charge moment, so a
+rollover is only possible while the window is still `open`. Once the cutoff cron
+has locked and charged it, moving those orders would mean refunding them. This
+means the operator must see a thin window *before* its cutoff day, so the demand
+readout must cover **open** windows and show hours-to-cutoff, not just confirmed
+ones.
+
+**Mechanics.** `DeliveryWindow.status` gains `rolled_over`. Rolling a window:
+
+1. Set the window `rolled_over`. It accepts no further joins and the cutoff run
+   skips it — there is nothing left in it to charge.
+2. Move every `committed` order to the city's next `open` window, recomputing
+   `debitDate` and `cancellationDeadline` from that window's `cutoffAt`. Prices
+   are not re-snapshotted: `totalPence` stays as joined.
+3. Email every affected joiner the new delivery date and new charge date.
+
+A window may be rolled more than once — B can roll into C — so the operation
+must be repeatable.
+
+**Collision rule.** A joiner who already holds an order in the target window
+would, after the move, hold two for the same basket and cycle, which
+`@@unique([userId, basketId, deliveryWindowId])` forbids. Their rolled order is
+**cancelled** and they keep the order they already had; the email tells them so.
+Merging the two tiers' quantities is the alternative and is deliberately not
+chosen — it would change what someone pays without them asking.
+
+**Copy consequence.** Nothing may imply a delivery is guaranteed on a specific
+date at join time. The confirm step keeps the delivery date, the charge date and
+free cancellation, and the "How it works" accordion (§9.1) must say plainly that
+a delivery can move to the next date if too few neighbours join, and that
+joiners are told when it does.
+
+*Admin, reduced to what launch actually needs:* city schedules, basket + tier
+creation with pause/archive (without which there is nothing to join), the
+confirmed-cycles readout above, and per-order refund. The demand dashboard,
+purchase-order management, stock updates and reorder alerts are deferred.
+
+Sections 5.3, 7.3 step 3, 8 and 11 are read subject to this revision. Where they
+describe automated supply, stock movement or `PurchaseOrder` writes, that work
+is out of the current milestone.
 
 ## 1. Context
 
@@ -26,13 +135,15 @@ Neither v2.0 nor v2.1 was ever implemented, so this design covers all three at
 once rather than treating v3.0 as an increment. Where this document departs from
 all three, §5 explains why.
 
-**Model statement.** Each city runs a delivery twice a month. The platform
-pre-schedules baskets (city × food) against those dates. Users browse, choose a
-quantity tier, and join. Joining saves a card and creates a `committed` order
-without charging it. Three days before delivery the basket closes: demand is
-measured, and if it clears the threshold every committed card is charged and the
-importer order goes out. If it doesn't clear, the cycle is cancelled and nobody
-is charged.
+**Model statement** (as amended by revisions 4 and 5). Each city runs a delivery
+twice a month. The platform pre-schedules baskets (city × food) against those
+dates. Users browse, choose a quantity tier, and join. Joining saves a card and
+creates a `committed` order without charging it. Three days before delivery the
+window closes, and every committed card is charged — there is no minimum, so
+two joiners are supplied as readily as ten. Joining is free to cancel until that
+moment. If a window's demand is too thin to run, the operator rolls it over to
+the next window and the joiners are told; nothing is cancelled and nobody is
+charged for a delivery that did not happen. Supply is bought by hand at launch.
 
 ## 2. Scope
 
@@ -366,6 +477,100 @@ still depends on it**. A user with two committed joins shares one saved card, so
 unconditionally detaching on the first cancellation would silently break the
 charge for the second. Detach only when no remaining order for that user holds
 the same `stripePaymentMethodId` in a chargeable status.
+
+### 7.6 Exactly-once charging
+
+The cron charges saved cards with nobody present. A crash, a timeout, or two
+overlapping runs must never take a customer's money twice, and must never
+silently lose a payment we already took.
+
+**The governing principle: Stripe is the ledger, our database is a cache of it.
+Never infer a payment outcome — establish it.** Every defect found in review of
+the first cut came from inferring: assuming a stranded charge had failed,
+assuming an idempotency key would still be live, assuming a response we never
+saw meant nothing happened.
+
+#### 7.6.1 Why the obvious fixes are not enough
+
+- **Idempotency keys alone.** Stripe honours a key for 24 hours. The only thing
+  that revisits a stranded charge is the next daily cron — at or past expiry.
+  The key protects same-run retries and nothing else.
+- **`paymentIntents.search`.** Its index is eventually consistent, lagging by
+  around a minute. That lag is precisely the window being reconciled, so a
+  search can report "no payment" for one that exists. `paymentIntents.list`
+  filtered by `customer` is immediately consistent and is used instead, with
+  the metadata match applied client-side.
+- **Two outcomes.** `PaymentIntent.status` has seven values, not two.
+  `requires_action` (an off-session charge needing SCA) and `processing` are
+  neither success nor failure and must not be collapsed into either.
+
+#### 7.6.2 New model: `PaymentAttempt`
+
+Payment state cannot live only on `Order`, because those columns cannot express
+"we called Stripe and do not know what happened". Each attempt gets a row.
+
+`id`, `orderId`, `attemptNumber` (Int), `idempotencyKey` (String, unique),
+`stripePaymentIntentId` (String?), `status`
+(`pending` | `succeeded` | `failed` | `requires_action` | `abandoned`),
+`errorCode?`, `errorMessage?`, `createdAt`, `resolvedAt?`.
+Unique on (`orderId`, `attemptNumber`).
+
+#### 7.6.3 The charge protocol (write-ahead)
+
+1. **Claim** the order — conditional `updateMany` from `committed` or
+   `payment_failed` to `payment_pending`, stamping `paymentAttemptedAt`. Zero
+   rows claimed means another runner owns it; stop.
+2. Derive `attemptNumber` from `paymentRetryCount` and
+   `idempotencyKey = order-{orderId}-attempt-{attemptNumber}`.
+3. **Write the `PaymentAttempt` row as `pending` before any network call.**
+   This is the write-ahead record: past this point we can always tell that a
+   call *may* have been made. The unique key on (`orderId`, `attemptNumber`) is
+   the concurrency backstop — two runners racing the same attempt collide here
+   and the loser stops.
+4. Call Stripe with that idempotency key and
+   `metadata: { orderId, attemptNumber }`. The metadata is what makes an
+   orphaned charge findable.
+5. Resolve attempt and order together in one transaction.
+6. If the call throws, **leave the attempt `pending`.** The reconciler owns it.
+   Do not guess.
+
+#### 7.6.4 The reconciler — runs first, every run
+
+For every `pending` attempt older than `PAYMENT_RECONCILE_AFTER_MINUTES` (10):
+
+1. `paymentIntents.list({ customer, created: { gte: attempt.createdAt - 1h } })`,
+   matched client-side on `metadata.orderId` and `metadata.attemptNumber`.
+2. **Found — adopt it.** Record the intent id and map its status. Never charge.
+3. **Not found — the request never reached Stripe.** Mark the attempt
+   `abandoned` and return the order to `payment_failed` **without incrementing
+   `paymentRetryCount`**, since no charge was in fact attempted. A fresh attempt
+   with a fresh key follows on the next run.
+4. **More than one match — a duplicate exists.** Adopt the first `succeeded`,
+   refund the others, and flag for admin. This is the belt to the write-ahead's
+   braces: if a double charge ever does occur, the system finds and reverses it
+   rather than waiting for the customer to notice.
+
+Status mapping: `succeeded` → order `paid`; `canceled`,
+`requires_payment_method`, `requires_confirmation` → `payment_failed`;
+`requires_action` → `payment_failed` with the code preserved, and the customer
+emailed a link to authenticate; `processing` → leave `pending` and reconcile
+again next run.
+
+#### 7.6.5 Webhook as the second channel
+
+`payment_intent.succeeded` and `payment_intent.payment_failed` are handled and
+reconciled against `metadata.orderId`, idempotently. Stripe usually tells us
+within seconds, long before the next cron — so the webhook, not the reconciler,
+resolves most stranded attempts. The reconciler is the backstop for when the
+webhook is missed or misconfigured. Neither is trusted alone.
+
+#### 7.6.6 Retry counting
+
+`paymentRetryCount` increments **only on a determined failure** — a real
+decline. An abandoned or unknown attempt never counts against the customer's
+three tries. Three determined failures release the order to `cancelled`, and
+that release is evaluated for every failed order regardless of its window's
+delivery date.
 
 ## 8. Admin surface
 

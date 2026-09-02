@@ -998,8 +998,9 @@ afterAll(async () => {
   await prisma.basketTier.deleteMany({ where: { basketId } });
   await prisma.basket.deleteMany({ where: { id: basketId } });
   await prisma.purchaseOrder.deleteMany({ where: { sku: { product: { name: { startsWith: TAG } } } } });
-  await prisma.deliveryWindow.deleteMany({ where: { cityId } });
-  await prisma.city.deleteMany({ where: { id: cityId } });
+  // By TAG prefix, not cityId — the last case creates a second city of its own.
+  await prisma.deliveryWindow.deleteMany({ where: { city: { name: { startsWith: TAG } } } });
+  await prisma.city.deleteMany({ where: { name: { startsWith: TAG } } });
   await prisma.sku.deleteMany({ where: { product: { name: { startsWith: TAG } } } });
   await prisma.product.deleteMany({ where: { name: { startsWith: TAG } } });
   await prisma.user.deleteMany({ where: { email: { startsWith: TAG } } });
@@ -1050,8 +1051,11 @@ describe("demandedGrams", () => {
 });
 
 describe("ensureOpenWindows", () => {
+  // 2026-09-20 is chosen so BOTH upcoming cutoffs are still ahead of `now`.
+  // At 2026-10-01 the first series date (10-03) has a cutoff of 09-30, already
+  // past, and would correctly open `locked` — see the last case in this block.
   it("opens two windows ahead for an active city", async () => {
-    const now = new Date("2026-10-01T09:00:00Z");
+    const now = new Date("2026-09-20T09:00:00Z");
     await ensureOpenWindows(now);
     const open = await prisma.deliveryWindow.findMany({
       where: { cityId, status: "open", deliveryDate: { gte: now } },
@@ -1063,7 +1067,7 @@ describe("ensureOpenWindows", () => {
   });
 
   it("is idempotent — a second run creates nothing", async () => {
-    const now = new Date("2026-10-01T09:00:00Z");
+    const now = new Date("2026-09-20T09:00:00Z");
     const second = await ensureOpenWindows(now);
     expect(second.created).toBe(0);
   });
@@ -1606,6 +1610,19 @@ Run: `npx vitest run src/lib/joins.integration.test.ts`
 Expected: FAIL — cannot resolve `./joins`.
 
 - [ ] **Step 3: Implement**
+
+> **Correction applied during execution.** The code below reads the open window
+> and then writes the order in two separate round-trips. That is a race: once
+> Task 8's cron flips windows to `locked` at the cutoff, a join in flight can
+> land a `committed` order on a window whose cycle has already been decided —
+> never counted in its demand, never charged, never delivered, while the
+> customer sees a confirmation saying they are in. Spec §7.4 already requires
+> the guard ("Joining is refused if the window has locked between page load and
+> submission"). Wrap the window selection, the existing-order lookup and the
+> order write in one `prisma.$transaction`, re-verifying `window.status ===
+> "open"` inside it immediately before the write. Keep the basket and tier
+> lookups outside — they do not participate in the race. Add a test asserting a
+> join against a `locked` window both throws and leaves no order row behind.
 
 Create `src/lib/joins.ts`:
 
