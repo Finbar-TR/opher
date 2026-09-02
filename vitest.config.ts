@@ -10,6 +10,9 @@ export default defineConfig({
     },
   },
   test: {
+    // Integration tests share one SQLite file, and runCycles sweeps globally,
+    // so files must not run concurrently.
+    fileParallelism: false,
     env: {
       // Prisma resolves file:./dev.db relative to the schema directory.
       DATABASE_URL: "file:./dev.db",
