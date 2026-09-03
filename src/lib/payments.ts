@@ -330,3 +330,20 @@ export async function detachPaymentMethod(paymentMethodId: string): Promise<void
   if (!stripe) return;
   await stripe.paymentMethods.detach(paymentMethodId);
 }
+
+// The client tells us which PaymentMethod the SetupIntent produced. Verify it
+// really belongs to this customer before an order is written against it —
+// otherwise a crafted request could attach someone else's saved card to its
+// own order. With no Stripe key there is nothing to check.
+export async function assertPaymentMethodBelongsTo(
+  customerId: string,
+  paymentMethodId: string
+): Promise<void> {
+  if (!stripe) return;
+
+  const pm = await stripe.paymentMethods.retrieve(paymentMethodId);
+  const owner = typeof pm.customer === "string" ? pm.customer : pm.customer?.id;
+  if (owner !== customerId) {
+    throw new Error("That payment method isn't yours.");
+  }
+}
