@@ -19,6 +19,17 @@ import {
   PaymentConfigurationError,
   type ChargeOutcome,
 } from "./payments";
+import { sendChargeSucceeded, sendChargeFailed, sendOrderReleased } from "./notifications";
+
+// Fire-and-forget notification. A charging run's correctness must never depend
+// on an email provider being reachable.
+async function notify(fn: (orderId: string) => Promise<void>, orderId: string, kind: string) {
+  try {
+    await fn(orderId);
+  } catch (err) {
+    console.error(`[email] ${kind} failed for order ${orderId}:`, err);
+  }
+}
 
 // The daily 08:00 UTC run. 08:00 is not arbitrary: it is the hour every window's
 // cutoff falls at, so the cutoff and the charge are the same moment.
@@ -296,6 +307,7 @@ async function runPhases(now: Date, result: CycleRunResult): Promise<void> {
             `[payments] order ${order.id} released after ${attemptCount} charge attempts that never produced a confirmed outcome (retry count ${order.paymentRetryCount}) — investigate the payment method, the customer was otherwise stuck`
           );
         }
+        await notify(sendOrderReleased, order.id, "order released");
         continue;
       }
 
@@ -443,8 +455,12 @@ export async function resolveChargeOutcome(params: {
   }
 
   const plan = planFor(outcome, now);
+  // Set inside the transaction only when the order row was actually moved onto
+  // `plan.order`, so a notification is never sent for a resolution that turned
+  // out to be a no-op (the order was already gone from `payment_pending`).
+  let orderMoved = false;
 
-  return prisma.$transaction(async (tx) => {
+  const resolution = await prisma.$transaction(async (tx) => {
     const claimed = await tx.paymentAttempt.updateMany({
       where: { id: attemptId, status: "pending" },
       data: plan.attempt,
@@ -502,9 +518,26 @@ export async function resolveChargeOutcome(params: {
           (intentId ? ` (payment intent ${intentId})` : "") +
           " — needs manual reconciliation"
       );
+    } else {
+      orderMoved = true;
     }
     return "resolved";
   });
+
+  // Single site for the "charged" / "payment failed" emails: every path that
+  // can settle an order this way — the cutoff charge, the retry charge and the
+  // reconciler — all resolve through this function, so notifying here (rather
+  // than at each call site) covers all three without triplicating the wiring.
+  // Sent only when the order row was genuinely moved onto `plan.order.status`.
+  if (resolution === "resolved" && orderMoved) {
+    if (plan.order.status === "paid") {
+      await notify(sendChargeSucceeded, orderId, "charge succeeded");
+    } else if (plan.order.status === "payment_failed") {
+      await notify(sendChargeFailed, orderId, "charge failed");
+    }
+  }
+
+  return resolution;
 }
 
 // ---------------------------------------------------------------------------

@@ -10,9 +10,7 @@ import {
 import { joinBasket } from "@/lib/joins";
 import { formatAddress } from "@/lib/address";
 import { addressSchema, type AddressInput } from "@/lib/join-input";
-// Task 7 adds src/lib/notifications.ts; restore this import and the
-// try/catch below once it exists.
-// import { sendJoinConfirmation } from "@/lib/notifications";
+import { sendJoinConfirmation } from "@/lib/notifications";
 
 // Step one of the join: make sure the customer exists at Stripe and open a
 // SetupIntent so the browser can collect a card. Nothing is charged, and no
@@ -88,12 +86,11 @@ export async function completeJoin(input: {
   });
 
   // The order exists; a failed email must not undo that. Swallow and log.
-  // Task 7 restores this once src/lib/notifications.ts exists.
-  // try {
-  //   await sendJoinConfirmation(result.orderId);
-  // } catch (err) {
-  //   console.error(`[email] join confirmation failed for order ${result.orderId}:`, err);
-  // }
+  try {
+    await sendJoinConfirmation(result.orderId);
+  } catch (err) {
+    console.error(`[email] join confirmation failed for order ${result.orderId}:`, err);
+  }
 
   return result;
 }
