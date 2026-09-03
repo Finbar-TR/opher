@@ -86,8 +86,12 @@ export function cycleState(
 }
 
 export async function listAdminBaskets(): Promise<AdminBasketRow[]> {
+  // Archived baskets are included deliberately. Excluding them made Archive a
+  // one-way door: an archived basket vanished from the only screen that lists
+  // baskets, so nothing could ever set its status back — while its live orders
+  // stayed attached to the invisible original, still charged at cutoff and
+  // still shown in the what-to-buy readout. The page renders them apart.
   const baskets = await prisma.basket.findMany({
-    where: { status: { not: "archived" } },
     include: {
       city: { include: { windows: { where: { status: "open" }, orderBy: { deliveryDate: "asc" }, take: 1 } } },
       sku: { include: { product: true } },

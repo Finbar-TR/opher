@@ -145,6 +145,20 @@ describe("listAdminBaskets", () => {
     expect(rows.find((r) => r.id === basketId)!.status).toBe("paused");
     await prisma.basket.update({ where: { id: basketId }, data: { status: "open" } });
   });
+
+  it("includes an archived basket, so Archive is not a one-way door", async () => {
+    // Excluded, an archived basket left no screen that could restore it — while
+    // its orders stayed live and still charged at cutoff.
+    await prisma.basket.update({ where: { id: basketId }, data: { status: "archived" } });
+    const rows = await listAdminBaskets();
+    const row = rows.find((r) => r.id === basketId);
+    expect(row).toBeDefined();
+    expect(row!.status).toBe("archived");
+    // And it still reports the joiners it is holding, which is the reason
+    // restoring it matters.
+    expect(row!.joinersThisCycle).toBe(3);
+    await prisma.basket.update({ where: { id: basketId }, data: { status: "open" } });
+  });
 });
 
 describe("listUpcomingCycles", () => {
