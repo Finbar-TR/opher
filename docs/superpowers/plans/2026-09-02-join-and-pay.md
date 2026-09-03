@@ -792,7 +792,14 @@ export default async function BasketDetailPage({
 
   const now = new Date();
   const daysLeft = daysBetween(now, basket.cutoffAt);
+
+  // Gate the CTA on the basket being OPEN, not merely on it not being paused.
+  // `getBasketDetail` filters no status, so a direct link to an archived
+  // basket reaches this page — and spec §7.2 is explicit that a paused or
+  // archived basket accepts no joins regardless of window status.
+  const joinable = basket.status === "open";
   const paused = basket.status === "paused";
+  const archived = basket.status === "archived";
 
   return (
     <div className="mx-auto max-w-3xl space-y-8">
@@ -825,14 +832,23 @@ export default async function BasketDetailPage({
             <DemandNote joiners={basket.joiners} grams={basket.grams} />
           </div>
 
-          {paused ? (
-            <p className="mt-6 rounded-xl border border-line bg-saffron p-4 text-sm font-medium text-saffron-ink">
-              Temporarily paused — existing orders are unaffected.
-            </p>
-          ) : (
+          {joinable && (
             <Link href={`/baskets/${basket.id}/join`} className="btn-primary mt-6 inline-block">
               Join this basket
             </Link>
+          )}
+          {paused && (
+            <p className="mt-6 rounded-xl border border-line bg-saffron p-4 text-sm font-medium text-saffron-ink">
+              Temporarily paused — existing orders are unaffected.
+            </p>
+          )}
+          {archived && (
+            <p className="mt-6 rounded-xl border border-line bg-brand-50 p-4 text-sm text-muted">
+              This basket is no longer running.{" "}
+              <Link href="/baskets" className="font-medium text-ink underline">
+                See what&apos;s available
+              </Link>
+            </p>
           )}
         </div>
       </div>
