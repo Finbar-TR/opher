@@ -27,9 +27,15 @@ export default async function WindowOrdersPage({
 
   const orders = await listWindowOrders(windowId);
   const refundable = orders.filter((o) => o.canRefund);
+  // What was taken. Every `paid` order counts, including one whose payment
+  // intent went missing — the customer was still charged.
   const takings = orders
     .filter((o) => o.status === "paid")
     .reduce((sum, o) => sum + o.totalPence, 0);
+  // What will actually move if the operator refunds the window. An order with
+  // no intent id cannot be refunded through Stripe, so naming it in an
+  // irreversible confirmation would promise money that stays put.
+  const refundableTotal = refundable.reduce((sum, o) => sum + o.totalPence, 0);
 
   return (
     <div className="mx-auto max-w-3xl">
@@ -49,10 +55,13 @@ export default async function WindowOrdersPage({
       {refundable.length > 0 && (
         <form action={refundWindowAction} className="card mt-6">
           <p className="text-[15px] text-muted">
-            Pulling this delivery? Refunding the whole window returns{" "}
-            <strong className="text-ink">{formatGBP(takings)}</strong> to{" "}
+            Pulling this delivery? This refunds{" "}
+            <strong className="text-ink">every food</strong> in{" "}
+            {window.city.name}&apos;s run, not just the one you arrived from —{" "}
+            <strong className="text-ink">{formatGBP(refundableTotal)}</strong> to{" "}
             {refundable.length === 1 ? "1 customer" : `${refundable.length} customers`}.
-            This cannot be undone.
+            This cannot be undone. To pull one food, refund its orders
+            individually below.
           </p>
           <input type="hidden" name="windowId" value={windowId} />
           <button type="submit" className="btn-danger mt-3">
@@ -65,7 +74,9 @@ export default async function WindowOrdersPage({
         {orders.map((o) => (
           <div key={o.id} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
             <div>
-              <p className="font-medium text-ink">{o.userName}</p>
+              <p className="font-medium text-ink">
+                {o.userName} · {o.productName}
+              </p>
               <p className="text-sm text-muted">{o.userEmail} · {o.tierLabel}</p>
             </div>
             <div className="flex items-center gap-3">
@@ -75,7 +86,10 @@ export default async function WindowOrdersPage({
                 <form action={refundOrderAction}>
                   <input type="hidden" name="orderId" value={o.id} />
                   <input type="hidden" name="windowId" value={windowId} />
-                  <button type="submit" className="font-medium text-brand-700 hover:underline">
+                  {/* Danger styling, not a text link: this moves money and
+                      cannot be undone, so it must not look like the navigation
+                      link two lines up. */}
+                  <button type="submit" className="btn-danger">
                     Refund
                   </button>
                 </form>

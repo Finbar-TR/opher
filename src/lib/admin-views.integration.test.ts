@@ -282,6 +282,14 @@ describe("listWindowOrders", () => {
     expect(rows.every((r) => r.userEmail.startsWith(TAG))).toBe(true);
   });
 
+  it("names the food on every row", async () => {
+    // A window carries several foods. Without this the operator cannot tell
+    // which one a row is, and the per-order refund is the only per-food lever
+    // they have.
+    const rows = await listWindowOrders(windowId);
+    expect(rows.every((r) => r.productName === `${TAG} Yam`)).toBe(true);
+  });
+
   it("marks only a paid order refundable", async () => {
     const rows = await listWindowOrders(windowId);
     const paid = rows.find((r) => r.id === paidOrderId)!;

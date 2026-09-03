@@ -51,6 +51,7 @@ export type WindowOrderRow = {
   id: string;
   userName: string;
   userEmail: string;
+  productName: string;
   tierLabel: string;
   status: string;
   totalPence: number;
@@ -201,6 +202,10 @@ export async function listWindowOrders(windowId: string): Promise<WindowOrderRow
     include: {
       user: { select: { name: true, email: true } },
       tier: { select: { label: true } },
+      // One delivery run carries several foods, so a row reading
+      // "Aisha · Large (10 kg)" does not say which food it is — and the
+      // operator refunding by hand has to know. The food belongs on the row.
+      basket: { select: { sku: { select: { product: { select: { name: true } } } } } },
     },
     orderBy: { createdAt: "asc" },
   });
@@ -209,6 +214,7 @@ export async function listWindowOrders(windowId: string): Promise<WindowOrderRow
     id: o.id,
     userName: o.user.name,
     userEmail: o.user.email,
+    productName: o.basket.sku.product.name,
     tierLabel: o.tier.label,
     status: o.status,
     totalPence: o.totalPence,
