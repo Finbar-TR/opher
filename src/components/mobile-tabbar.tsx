@@ -2,17 +2,22 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-
-const TABS = [{ href: "/", label: "Home" }];
+import type { SessionUser } from "@/lib/auth";
 
 // Fixed bottom navigation on phones only (hidden at sm+). Active tab in tomato.
-export function MobileTabBar() {
+export function MobileTabBar({ user }: { user: SessionUser | null }) {
   const pathname = usePathname();
+
+  const tabs = [
+    { href: "/", label: "Home" },
+    { href: "/baskets", label: "Baskets" },
+    ...(user ? [{ href: "/orders", label: "Orders" }] : []),
+  ];
 
   return (
     <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-line bg-surface/95 backdrop-blur sm:hidden">
       <ul className="mx-auto flex max-w-5xl">
-        {TABS.map((t) => {
+        {tabs.map((t) => {
           const active =
             t.href === "/" ? pathname === "/" : pathname.startsWith(t.href);
           return (

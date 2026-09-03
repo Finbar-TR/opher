@@ -49,6 +49,14 @@ export async function Nav() {
 
           {/* Desktop */}
           <div className="ml-auto hidden items-center gap-1 text-sm sm:flex">
+            <NavLink href="/baskets" dark={dark}>
+              Baskets
+            </NavLink>
+            {user && (
+              <NavLink href="/orders" dark={dark}>
+                Orders
+              </NavLink>
+            )}
             {operator && (
               <NavLink href="/operator" dark={dark}>
                 Operator
@@ -99,7 +107,7 @@ export async function Nav() {
           </div>
         </nav>
       </header>
-      <MobileTabBar />
+      <MobileTabBar user={user} />
     </>
   );
 }
