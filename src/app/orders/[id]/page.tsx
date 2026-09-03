@@ -14,10 +14,10 @@ export default async function OrderDetailPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ joined?: string }>;
+  searchParams: Promise<{ joined?: string; cancelFailed?: string }>;
 }) {
   const { id } = await params;
-  const { joined } = await searchParams;
+  const { joined, cancelFailed } = await searchParams;
   const user = await requireUser();
   const order = await getUserOrder(id, user.id);
   if (!order) notFound();
@@ -33,6 +33,13 @@ export default async function OrderDetailPage({
             We&apos;ll charge your card on {formatWeekday(order.cancellationDeadline)}.
           </p>
         </div>
+      )}
+
+      {cancelFailed === "1" && (
+        <p className="rounded-xl border border-line bg-saffron p-4 text-sm font-medium text-saffron-ink">
+          We couldn&apos;t cancel this order — its basket has now closed and payment is already
+          being taken. You&apos;ll get a receipt shortly.
+        </p>
       )}
 
       <div className="card">
