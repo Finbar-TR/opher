@@ -10,3 +10,8 @@ export function formatGBP(pence: number): string {
 export function poundsToPence(pounds: number): number {
   return Math.round(pounds * 100);
 }
+
+// Price per kilogram, for the tier ladder. Input is pence per kg.
+export function formatPricePerKg(pencePerKg: number): string {
+  return `${formatGBP(pencePerKg)}/kg`;
+}
