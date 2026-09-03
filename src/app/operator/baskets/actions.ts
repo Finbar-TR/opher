@@ -6,6 +6,7 @@ import { requireOperator } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { BASKET_STATUSES } from "@/lib/constants";
 import { parseTiers } from "@/lib/basket-tiers";
+import type { BasketFormState, BasketFormValues } from "./basket-input";
 
 const basketSchema = z.object({
   cityId: z.string().trim().min(1, "Pick a city"),
@@ -13,32 +14,50 @@ const basketSchema = z.object({
   label: z.string().trim().min(1, "Give the basket a name"),
 });
 
-export async function createBasketAction(formData: FormData): Promise<void> {
+// Returns its errors rather than throwing them. Every failure below is a
+// routine operator mistake — a half-filled size row, a city that already has
+// this food — and the error boundary cannot show what it was in production, so
+// the message comes back through `useActionState` next to the form, with the
+// operator's typed values so a rejected submit does not wipe fifteen fields.
+export async function createBasketAction(
+  _prev: BasketFormState,
+  formData: FormData
+): Promise<BasketFormState> {
   const operator = await requireOperator();
-
-  const basketResult = basketSchema.safeParse({
-    cityId: formData.get("cityId"),
-    skuId: formData.get("skuId"),
-    label: formData.get("label"),
-  });
-
-  if (!basketResult.success) {
-    const firstIssue = basketResult.error.issues[0];
-    throw new Error(firstIssue?.message || "That form isn't quite right — check the values and try again.");
-  }
-
-  const basket = basketResult.data;
 
   // Tier fields arrive as parallel arrays: tierLabel[], tierWeightKg[], tierPricePounds[].
   const labels = formData.getAll("tierLabel").map(String);
   const weights = formData.getAll("tierWeightKg").map(String);
   const prices = formData.getAll("tierPricePounds").map(String);
 
+  const values: BasketFormValues = {
+    cityId: String(formData.get("cityId") ?? ""),
+    skuId: String(formData.get("skuId") ?? ""),
+    label: String(formData.get("label") ?? ""),
+    tierLabels: labels,
+    tierWeights: weights,
+    tierPrices: prices,
+  };
+
+  const basketResult = basketSchema.safeParse(values);
+
+  if (!basketResult.success) {
+    const firstIssue = basketResult.error.issues[0];
+    return {
+      error:
+        firstIssue?.message ||
+        "That form isn't quite right — check the values and try again.",
+      values,
+    };
+  }
+
+  const basket = basketResult.data;
+
   // The zipping, the blank-row rule, the 2–4 bound and the unit conversion all
   // live in `parseTiers` so they can be tested without faking `requireOperator`
   // or a database. None of it had a test before.
   const parsed = parseTiers(labels, weights, prices);
-  if (!parsed.ok) throw new Error(parsed.message);
+  if (!parsed.ok) return { error: parsed.message, values };
   const tiers = parsed.tiers;
 
   // One live basket per bulk unit per city. The schema cannot express a partial
@@ -48,7 +67,10 @@ export async function createBasketAction(formData: FormData): Promise<void> {
     where: { cityId: basket.cityId, skuId: basket.skuId, status: { not: "archived" } },
   });
   if (clash) {
-    throw new Error("That city already has a live basket for this food.");
+    return {
+      error: "That city already has a live basket for this food.",
+      values,
+    };
   }
 
   await prisma.basket.create({
@@ -70,8 +92,15 @@ export async function createBasketAction(formData: FormData): Promise<void> {
 
   revalidatePath("/operator/baskets");
   revalidatePath("/baskets");
+
+  return { error: null, values: null };
 }
 
+// This one keeps THROWING. Pause, Resume and Archive post fixed hidden values
+// the operator cannot mistype, so a failure here means the basket is gone or
+// the request was tampered with — genuinely unexpected, and the error boundary
+// is the right place for it. Logged first so the digest shown on screen can be
+// matched to a message in the server log.
 export async function setBasketStatusAction(formData: FormData): Promise<void> {
   await requireOperator();
   const id = String(formData.get("basketId") ?? "");
@@ -84,8 +113,13 @@ export async function setBasketStatusAction(formData: FormData): Promise<void> {
 
   // Pausing and archiving both stop new joins. Neither touches existing orders:
   // those are already committed, and their customers are owed the delivery they
-  // joined for.
-  await prisma.basket.update({ where: { id }, data: { status } });
+  // joined for. Restoring an archived basket to `open` runs through here too.
+  try {
+    await prisma.basket.update({ where: { id }, data: { status } });
+  } catch (err) {
+    console.error("[operator] setBasketStatusAction failed", { id, status }, err);
+    throw err;
+  }
 
   revalidatePath("/operator/baskets");
   revalidatePath("/baskets");

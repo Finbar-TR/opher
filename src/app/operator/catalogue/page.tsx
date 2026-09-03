@@ -1,7 +1,7 @@
 import { requireOperator } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { OperatorNav } from "@/components/operator-nav";
-import { createProductAction } from "./actions";
+import { ProductForm } from "./product-form";
 import { formatGBP } from "@/lib/money";
 import { formatKg } from "@/lib/weight";
 import { PRODUCT_CATEGORIES } from "@/lib/constants";
@@ -30,43 +30,10 @@ export default async function CataloguePage() {
         A food and the bulk unit you buy it in. Baskets point at one of these.
       </p>
 
-      <form action={createProductAction} className="card mt-6 space-y-4">
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div>
-            <label className="label" htmlFor="name">Food</label>
-            <input id="name" name="name" className="input" required placeholder="White Yam" />
-          </div>
-          <div>
-            <label className="label" htmlFor="category">Category</label>
-            <select id="category" name="category" className="input" defaultValue="dry">
-              {PRODUCT_CATEGORIES.map((c) => (
-                <option key={c} value={c}>
-                  {CATEGORY_LABELS[c]}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-        <div>
-          <label className="label" htmlFor="description">Description</label>
-          <input id="description" name="description" className="input" placeholder="Ambient-stable white yam." />
-        </div>
-        <div className="grid gap-4 sm:grid-cols-3">
-          <div>
-            <label className="label" htmlFor="skuLabel">Bulk unit</label>
-            <input id="skuLabel" name="skuLabel" className="input" required placeholder="25 kg crate" />
-          </div>
-          <div>
-            <label className="label" htmlFor="weightKg">Weight (kg)</label>
-            <input id="weightKg" name="weightKg" type="number" step="0.1" min="0.1" className="input" required />
-          </div>
-          <div>
-            <label className="label" htmlFor="wholesaleCostPounds">Cost (£)</label>
-            <input id="wholesaleCostPounds" name="wholesaleCostPounds" type="number" step="0.01" min="0" className="input" required />
-          </div>
-        </div>
-        <button type="submit" className="btn-primary">Add to catalogue</button>
-      </form>
+      {/* Only the form is a Client Component — the Prisma query above stays on
+          the server. It has to be one so a rejected submit can render its own
+          message beside it. */}
+      <ProductForm categoryLabels={CATEGORY_LABELS} />
 
       <div className="mt-8 space-y-3">
         {products.map((p) => (
