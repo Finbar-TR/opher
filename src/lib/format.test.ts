@@ -30,7 +30,7 @@ describe("daysBetween", () => {
   });
 
   it("floors a partial day", () => {
-    expect(daysBetween(new Date("2026-12-15T23:00:00Z"), new Date("2026-12-19T08:00:00Z"))).toBe(3);
+    expect(daysBetween(new Date("2026-12-15T08:00:00Z"), new Date("2026-12-19T02:00:00Z"))).toBe(3);
   });
 
   it("never returns a negative", () => {
