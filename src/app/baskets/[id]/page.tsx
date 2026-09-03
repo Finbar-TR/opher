@@ -19,7 +19,9 @@ export default async function BasketDetailPage({
 
   const now = new Date();
   const daysLeft = daysBetween(now, basket.cutoffAt);
+  const open = basket.status === "open";
   const paused = basket.status === "paused";
+  const archived = basket.status === "archived";
 
   return (
     <div className="mx-auto max-w-3xl space-y-8">
@@ -52,14 +54,24 @@ export default async function BasketDetailPage({
             <DemandNote joiners={basket.joiners} grams={basket.grams} />
           </div>
 
-          {paused ? (
-            <p className="mt-6 rounded-xl border border-line bg-saffron p-4 text-sm font-medium text-saffron-ink">
-              Temporarily paused — existing orders are unaffected.
-            </p>
-          ) : (
+          {open && (
             <Link href={`/baskets/${basket.id}/join`} className="btn-primary mt-6 inline-block">
               Join this basket
             </Link>
+          )}
+          {paused && (
+            <p className="mt-6 rounded-xl border border-line bg-saffron p-4 text-sm font-medium text-saffron-ink">
+              Temporarily paused — existing orders are unaffected.
+            </p>
+          )}
+          {archived && (
+            <p className="mt-6 rounded-xl border border-line bg-surface p-4 text-sm text-muted">
+              This basket is no longer running.{" "}
+              <Link href="/baskets" className="font-semibold text-ink hover:underline">
+                See what&apos;s open now
+              </Link>
+              .
+            </p>
           )}
         </div>
       </div>
