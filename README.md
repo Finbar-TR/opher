@@ -77,10 +77,10 @@ regulatory advice.
 
 ## Notifications (email)
 
-Password-reset and email-verification links are sent today; join and order emails
-(join confirmation, charge success/failure, refund issued) are not wired up yet. In
-dev with no `RESEND_API_KEY`, emails are logged to the console instead of sent. Set
-`RESEND_API_KEY` + `EMAIL_FROM` to send for real.
+Password-reset and email-verification links are sent, alongside four order emails:
+join confirmation, payment succeeded, payment failed, and order cancelled/released.
+In dev with no `RESEND_API_KEY`, emails are logged to the console instead of sent.
+Set `RESEND_API_KEY` + `EMAIL_FROM` to send for real.
 
 ## Deploying
 
@@ -125,10 +125,14 @@ Charging happens once, by design, even across a crashed or overlapping run:
 ## Environment variables
 
 `DATABASE_URL` (`file:` sqlite / `mysql://` / `postgres://`), `SESSION_SECRET`,
-`APP_URL`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `RESEND_API_KEY`,
-`EMAIL_FROM`, `CRON_SECRET` — see `.env.example`. Regenerate PWA icons with
-`npm run gen:icons`. Before a public launch, have a solicitor review `/privacy`,
-`/terms`, `/cookies` (UK-oriented templates) and confirm food-hygiene registration if
+`APP_URL`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`,
+`NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY`, `RESEND_API_KEY`, `EMAIL_FROM`,
+`CRON_SECRET` — see `.env.example`. `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` is the
+browser key Stripe Elements uses to collect a card during join; without it the
+join flow falls back to a keyless dev path that saves a placeholder card
+instead of calling Stripe. Regenerate PWA icons with `npm run gen:icons`.
+Before a public launch, have a solicitor review `/privacy`, `/terms`,
+`/cookies` (UK-oriented templates) and confirm food-hygiene registration if
 you handle food.
 
 ## What's covered
@@ -137,16 +141,20 @@ you handle food.
   account page (name, **delivery address**, password).
 - City delivery schedules; an operator-curated catalogue of products and SKUs;
   admin-created baskets with 2–4 quantity tiers priced per kg.
-- Joining saves a card without charging it; the cutoff cron charges every
-  committed order in a window, three days before delivery, with no minimum
-  demand.
-- Free cancellation until the cutoff, automatic payment retries, and operator
+- Browsing baskets by city and joining one with a card saved via Stripe
+  Elements — a three-step flow (address, size, card) that never charges at
+  join time.
+- My-orders, with free cancellation until the basket closes.
+- Four order emails — join confirmation, payment succeeded, payment failed,
+  and order cancelled/released — alongside the existing password-reset and
+  email-verification mail.
+- The cutoff cron charges every committed order in a window at its city's
+  cutoff, with no minimum demand, automatic payment retries, and operator
   refunds for a single order or a whole delivery.
 
 ## Roadmap
 
-Operator screens for cities, baskets, the demand dashboard and refunds; the
-member-facing browse/join/orders flow; rolling a thin window over to the next
-delivery date instead of running it; join and order transactional emails;
+Operator screens for cities, baskets, the demand dashboard and refunds; rolling
+a thin window over to the next delivery date instead of running it;
 courier-API tracking; a supplier marketplace; push notifications; and Capacitor
 store wrappers.

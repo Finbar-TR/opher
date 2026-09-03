@@ -1,15 +1,15 @@
 import Link from "next/link";
 import { getCurrentUser } from "@/lib/auth";
 import { PhotoSlot } from "@/components/ui";
-
-// Deliberately minimal. The full landing page is designed in the next plan;
-// until then this page's only job is to be TRUE. Every order in a window is
-// charged at that window's cutoff — there is no minimum demand and no
-// conditional delivery — so any copy implying a customer might not be charged,
-// and every trace of the deleted portions/merge model, must not ship.
+import { BasketCard } from "@/components/basket-card";
+import { listOpenBaskets } from "@/lib/basket-views";
 
 export default async function HomePage() {
-  const user = await getCurrentUser();
+  const [user, openBaskets] = await Promise.all([
+    getCurrentUser(),
+    listOpenBaskets(),
+  ]);
+  const featured = openBaskets.slice(0, 3);
 
   return (
     <div className="space-y-16">
@@ -26,12 +26,18 @@ export default async function HomePage() {
             otherwise pay corner-shop money for.
           </p>
           <div className="mt-7 flex flex-wrap gap-3">
-            <Link href={user ? "/" : "/sign-up"} className="btn-primary">
-              Get started
+            <Link href="/baskets" className="btn-primary">
+              See baskets near you
             </Link>
-            <Link href="/" className="btn-secondary">
-              See what&apos;s available
-            </Link>
+            {user ? (
+              <Link href="/orders" className="btn-secondary">
+                View your orders
+              </Link>
+            ) : (
+              <Link href="/sign-up" className="btn-secondary">
+                Get started
+              </Link>
+            )}
           </div>
           <p className="mt-5 text-sm font-bold text-saffron-ink">
             ✓ Cancel free any time before your basket closes.
@@ -46,25 +52,33 @@ export default async function HomePage() {
         </div>
       </section>
 
+      {/* Open now */}
+      {featured.length > 0 && (
+        <section>
+          <h2 className="font-display text-2xl text-ink">Open now</h2>
+          <div className="mt-5 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+            {featured.map((b) => (
+              <BasketCard key={b.id} basket={b} />
+            ))}
+          </div>
+        </section>
+      )}
+
       {/* How it works */}
       <section>
         <h2 className="font-display text-2xl text-ink">How it works</h2>
-        <div className="mt-5 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
-          <Step n={1} title="Join a basket in your city">
+        <div className="mt-5 grid gap-5 sm:grid-cols-3">
+          <Step n={1} title="Join and save your card">
             Pick the food and the size you want from your city&apos;s next
-            delivery.
+            delivery. Nothing leaves your account when you join.
           </Step>
-          <Step n={2} title="Your card is saved, not charged">
-            Nothing leaves your account when you join. Cancel free until your
-            basket closes.
+          <Step n={2} title="The basket closes and your card is charged">
+            When the basket closes, your saved card is charged for the basket
+            you chose.
           </Step>
-          <Step n={3} title="It closes three days before delivery">
-            At that moment joining stops and your saved card is charged for the
-            basket you chose.
-          </Step>
-          <Step n={4} title="Delivery">
-            Your food arrives at the address you gave, on the delivery date for
-            that cycle.
+          <Step n={3} title="Delivery arrives">
+            Your food arrives at the address you gave, on the delivery date
+            for that basket.
           </Step>
         </div>
       </section>
