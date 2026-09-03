@@ -60,6 +60,14 @@ describe("sendChargeFailed", () => {
     expect(sent[0].subject.toLowerCase()).toContain("payment");
     expect(sent[0].html).toContain("/orders/ord_1");
   });
+
+  it("never tells the customer to update their card — there is no way to do that", async () => {
+    const { sendChargeFailed } = await import("./notifications");
+    await sendChargeFailed("ord_1");
+    const html = sent[0].html.toLowerCase();
+    expect(html).not.toContain("update your card");
+    expect(html).not.toContain("update it");
+  });
 });
 
 describe("sendOrderReleased", () => {

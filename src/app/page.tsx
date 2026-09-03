@@ -78,7 +78,8 @@ export default async function HomePage() {
           </Step>
           <Step n={3} title="Delivery arrives">
             Your food arrives at the address you gave, on the delivery date
-            for that basket.
+            for that basket — unless too few neighbours join, in which case
+            we move it and let you know.
           </Step>
         </div>
       </section>

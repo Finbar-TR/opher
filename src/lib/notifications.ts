@@ -104,8 +104,10 @@ export async function sendChargeFailed(orderId: string): Promise<void> {
     html: emailLayout(
       `<p>Hi ${o.user.name},</p>
        <p>We couldn't take payment for <strong>${orderLine(o)}</strong>.</p>
-       <p>We'll try again over the next couple of days. If your card has changed,
-          update it and we'll pick it up automatically.</p>
+       <p>We'll try again automatically over the next couple of days. If it still
+          doesn't go through, we'll release the order and you won't be charged —
+          you're welcome to join a later basket instead.</p>
+       <p>Just reply to this email if you'd like to talk to a person about it.</p>
        ${emailButton(`${appUrl()}/orders/${o.id}`, "View your order")}`
     ),
   });
