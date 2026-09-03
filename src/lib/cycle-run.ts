@@ -775,6 +775,7 @@ async function attemptCharge(orderId: string, now: Date): Promise<AttemptResult>
         paymentRetryCount: { increment: 1 },
       },
     });
+    await notify(sendChargeFailed, orderId, "charge failed");
     return "failed";
   }
 
