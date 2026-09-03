@@ -113,8 +113,29 @@ export async function setBasketStatusAction(formData: FormData): Promise<void> {
 
   // Pausing and archiving both stop new joins. Neither touches existing orders:
   // those are already committed, and their customers are owed the delivery they
-  // joined for. Restoring an archived basket to `open` runs through here too.
+  // joined for. Restoring an archived basket to `open` runs through here too —
+  // and archiving deliberately freed its (cityId, skuId) pair, so a new basket
+  // may have already taken it. Re-run the same clash check `createBasketAction`
+  // uses before writing, or Restore can put two live baskets on one pair.
   try {
+    const basket = await prisma.basket.findUniqueOrThrow({ where: { id } });
+
+    if (status === "open" && basket.status === "archived") {
+      const clash = await prisma.basket.findFirst({
+        where: {
+          cityId: basket.cityId,
+          skuId: basket.skuId,
+          status: { not: "archived" },
+          id: { not: id },
+        },
+      });
+      if (clash) {
+        throw new Error(
+          `Can't restore — "${clash.label}" already holds this city and food. Archive it first.`
+        );
+      }
+    }
+
     await prisma.basket.update({ where: { id }, data: { status } });
   } catch (err) {
     console.error("[operator] setBasketStatusAction failed", { id, status }, err);
