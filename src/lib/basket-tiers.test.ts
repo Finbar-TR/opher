@@ -88,6 +88,17 @@ describe("parseTiers", () => {
     );
   });
 
+  it("accepts exactly four sizes", () => {
+    const tiers = ok(
+      parseTiers(
+        ["A", "B", "C", "D"],
+        ["1", "2", "3", "4"],
+        ["1", "2", "3", "4"]
+      )
+    );
+    expect(tiers).toHaveLength(4);
+  });
+
   it("refuses more than four sizes", () => {
     const labels = ["A", "B", "C", "D", "E"];
     const message = err(

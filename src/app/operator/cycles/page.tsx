@@ -41,7 +41,8 @@ export default async function CyclesPage() {
       <h1 className="font-display text-[38px] leading-tight text-ink">What to buy</h1>
       <p className="mt-1 text-muted">
         Every delivery with joiners, soonest first. Order supply before the
-        cutoff — after it, cards are charged and the delivery is committed.
+        cutoff — it&apos;s when cards are meant to be charged and the delivery
+        committed.
       </p>
 
       {rows.length === 0 ? (
