@@ -55,7 +55,7 @@ export default async function WindowOrdersPage({
             This cannot be undone.
           </p>
           <input type="hidden" name="windowId" value={windowId} />
-          <button type="submit" className="btn-secondary mt-3">
+          <button type="submit" className="btn-danger mt-3">
             Refund every paid order
           </button>
         </form>
