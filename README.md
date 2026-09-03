@@ -152,6 +152,36 @@ you handle food.
   cutoff, with no minimum demand, automatic payment retries, and operator
   refunds for a single order or a whole delivery.
 
+## Operator
+
+Operator screens live under `/operator`, reachable only by an account with the
+`operator` role — every route redirects anyone else to `/`.
+
+- **Catalogue** (`/operator/catalogue`) — add a food and the bulk unit it's
+  bought in (a label, a weight, a wholesale cost) in one form; the list below
+  shows what's already in the catalogue.
+- **Baskets** (`/operator/baskets`) — open a basket for one food in one city
+  with 2–4 quantity tiers, then **pause**, **resume**, or **archive** it. Only
+  one live basket per food per city is allowed at a time.
+- **What to buy** (`/operator/cycles`) — every upcoming delivery with
+  joiners, how many bulk units to order, and how many hours are left before
+  the cutoff charges the cards. "See orders" opens a window's order list,
+  where a single `paid` order can be **refunded**, or the whole delivery
+  refunded at once.
+
+What's **not** here yet:
+
+- **City schedules** — cadence, anchor date, cutoff days, active toggle — are
+  seeded and changed directly in the database; there is no screen for them.
+- **No rollover lever.** Until it exists, a thin window can only be pulled by
+  refunding it after the cards have already been charged.
+- **No resolver** for a payment stuck in `payment_pending`, awaiting a human.
+- **No self-service way for a customer to fix a failed card.** A failed
+  payment is a dead end today.
+- **No editing a basket after creation** — its label, or adding/disabling a
+  tier. A mistyped price or size means archiving the basket and starting
+  again.
+
 ## Roadmap
 
 Operator screens for cities, baskets, the demand dashboard and refunds; rolling
