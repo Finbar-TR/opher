@@ -31,8 +31,9 @@ export default function OperatorError({
         <p className="badge bg-saffron text-saffron-ink">Something needs fixing</p>
         <h1 className="mt-3 font-display text-2xl text-ink">That didn&apos;t go through</h1>
         <p className="mt-2 text-muted">
-          Nothing was saved. The details are in the server log rather than on
-          this page — quote the reference below and they can be found.
+          This may or may not have gone through. Check the order or basket
+          list before retrying. The details are in the server log rather than
+          on this page — quote the reference below and they can be found.
         </p>
         {error.digest && (
           <p className="mt-3 text-sm text-muted">
