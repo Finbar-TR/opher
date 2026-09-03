@@ -2,8 +2,9 @@
 
 A food aggregation & bulk-buying **PWA** for the UK. Each city runs a delivery
 twice a month; members **join** a basket for a food in their city, choosing a
-quantity tier. Three days before delivery the basket closes — every joined
-order is charged and the operator buys supply for the delivery by hand.
+quantity tier. The basket closes at the city's cutoff (3 days before delivery,
+by default) — every joined order is charged and the operator buys supply for
+the delivery by hand.
 
 Built with **Next.js 16 (App Router) · Prisma · SQLite (dev) / Postgres (prod) ·
 Stripe · Tailwind v4**. Installable as a PWA — no app-store fees.
@@ -39,10 +40,11 @@ orders.
    in one city, with 2–4 quantity tiers (e.g. 2 kg £9.50 … 20 kg £72).
 3. A **member** browses baskets in their city and **joins** one, choosing a
    tier. Their card is saved but not charged.
-4. Three days before delivery the window **closes** at 08:00 UTC, and **every**
-   committed order in it is charged — there is no minimum demand: two joiners
-   are supplied as readily as ten. A window whose demand is too thin can be
-   **rolled over** to the next date by the operator instead of running it.
+4. At the city's cutoff (its own days-before-delivery setting, 3 by default) the
+   window **closes** at 08:00 UTC, and **every** committed order in it is
+   charged — there is no minimum demand: two joiners are supplied as readily
+   as ten. There is no rollover lever yet, so pulling a delivery after that
+   point means refunding it.
 5. The **operator** buys the goods by hand from the supplier and delivers on
    the city's delivery date.
 
@@ -184,7 +186,6 @@ What's **not** here yet:
 
 ## Roadmap
 
-Operator screens for cities, baskets, the demand dashboard and refunds; rolling
-a thin window over to the next delivery date instead of running it;
-courier-API tracking; a supplier marketplace; push notifications; and Capacitor
-store wrappers.
+City-schedule screens for the operator; rolling a thin window over to the next
+delivery date instead of running it; courier-API tracking; a supplier
+marketplace; push notifications; and Capacitor store wrappers.
