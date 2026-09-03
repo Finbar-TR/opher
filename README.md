@@ -157,19 +157,25 @@ you handle food.
 ## Operator
 
 Operator screens live under `/operator`, reachable only by an account with the
-`operator` role — every route redirects anyone else to `/`.
+`operator` role. A signed-out visitor is redirected to `/sign-in`; a signed-in
+member is redirected to `/`.
 
 - **Catalogue** (`/operator/catalogue`) — add a food and the bulk unit it's
   bought in (a label, a weight, a wholesale cost) in one form; the list below
   shows what's already in the catalogue.
 - **Baskets** (`/operator/baskets`) — open a basket for one food in one city
-  with 2–4 quantity tiers, then **pause**, **resume**, or **archive** it. Only
-  one live basket per food per city is allowed at a time.
+  with 2–4 quantity tiers, then **pause**, **resume**, or **archive** it.
+  Archived baskets are listed separately below the active ones and can be
+  **restored**. Only one live basket per SKU per city is allowed at a time —
+  the check keys on the bulk unit, so two SKUs of the same food would each
+  permit a basket in the same city.
 - **What to buy** (`/operator/cycles`) — every upcoming delivery with
-  joiners, how many bulk units to order, and how many hours are left before
-  the cutoff charges the cards. "See orders" opens a window's order list,
-  where a single `paid` order can be **refunded**, or the whole delivery
-  refunded at once.
+  joiners, how many bulk units to order, and how long is left before the
+  cutoff charges the cards. A cutoff that has passed while its window is still
+  open is flagged as such: nothing was charged and the cron has not run.
+  "See orders" opens a window's order list, where a single `paid` order can be
+  **refunded** — or the whole delivery at once, which covers every food in
+  that city's run, not just the one you arrived from.
 
 What's **not** here yet:
 
@@ -183,6 +189,9 @@ What's **not** here yet:
 - **No editing a basket after creation** — its label, or adding/disabling a
   tier. A mistyped price or size means archiving the basket and starting
   again.
+- **No refund notification email.** A refunded customer is told nothing by the
+  app; the money simply returns to their card. Refunds are routine now that
+  there is a screen for them, which is what makes the silence worth stating.
 
 ## Roadmap
 
