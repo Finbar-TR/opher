@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { formatGBP, formatPricePerKg } from "./money";
-import { formatWeekday, daysBetween } from "./dates";
+import { formatWeekday, formatWeekdayTime, daysBetween } from "./dates";
 
 describe("formatPricePerKg", () => {
   it("renders pence per kg as pounds", () => {
@@ -21,6 +21,21 @@ describe("formatGBP", () => {
 describe("formatWeekday", () => {
   it("names the day and date", () => {
     expect(formatWeekday(new Date("2026-12-19T00:00:00Z"))).toBe("Saturday 19 December");
+  });
+});
+
+describe("formatWeekdayTime", () => {
+  it("names the day, the date and the time of day", () => {
+    expect(formatWeekdayTime(new Date("2026-12-15T08:00:00Z"))).toBe(
+      "Tuesday 15 December at 08:00"
+    );
+  });
+
+  it("reads the cutoff in UTC, not the server's timezone", () => {
+    // 23:30 UTC must not roll forward or back a day for a machine set elsewhere.
+    expect(formatWeekdayTime(new Date("2026-12-15T23:30:00Z"))).toBe(
+      "Tuesday 15 December at 23:30"
+    );
   });
 });
 

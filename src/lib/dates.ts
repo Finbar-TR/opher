@@ -27,6 +27,21 @@ export function formatWeekday(date: Date): string {
   }).format(date);
 }
 
+// "Tuesday 15 December at 08:00" — `formatWeekday` plus the time of day, for the
+// operator screens where the thing being named is a deadline rather than a
+// date. Same UTC basis as `formatWeekday`, because the cutoff hour is UTC.
+export function formatWeekdayTime(date: Date): string {
+  return new Intl.DateTimeFormat("en-GB", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+    timeZone: "UTC",
+  }).format(date);
+}
+
 // Whole days from `from` to `to`, floored, never negative.
 export function daysBetween(from: Date, to: Date): number {
   const ms = to.getTime() - from.getTime();

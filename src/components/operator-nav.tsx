@@ -7,7 +7,11 @@ const LINKS = [
   { key: "catalogue", href: "/operator/catalogue", label: "Catalogue" },
 ] as const;
 
-export function OperatorNav({ current }: { current: string }) {
+// The union, not `string`: a typo in `current` should be a type error rather
+// than a nav bar that quietly highlights nothing.
+export type OperatorNavKey = (typeof LINKS)[number]["key"];
+
+export function OperatorNav({ current }: { current: OperatorNavKey }) {
   return (
     <nav className="mb-8 flex flex-wrap gap-2">
       {LINKS.map((l) => (

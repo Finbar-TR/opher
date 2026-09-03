@@ -196,6 +196,63 @@ describe("listUpcomingCycles", () => {
     expect(after.find((r) => r.basketId === basketId)!.hoursToCutoff).toBe(-24);
   });
 
+  // `state` is what the screen renders from. `hoursToCutoff` is rounded and so
+  // cannot be trusted to decide whether the cutoff has passed — these cases pin
+  // the difference.
+  describe("state", () => {
+    async function stateAt(now: string) {
+      const rows = await listUpcomingCycles(new Date(now));
+      return rows.find((r) => r.basketId === basketId)!;
+    }
+
+    it("is `open` while the cutoff is comfortably ahead", async () => {
+      const row = await stateAt("2026-12-14T08:00:00Z");
+      expect(row.state).toBe("open");
+      expect(row.windowStatus).toBe("open");
+    });
+
+    it("is `closing` under an hour out", async () => {
+      const row = await stateAt("2026-12-15T07:10:00Z");
+      expect(row.state).toBe("closing");
+    });
+
+    it("is still `closing` — never charged — in the last half hour", async () => {
+      // The bug this retires. 15 minutes out, `Math.round` gives zero hours, so
+      // the page read the rounded count as "cutoff passed" and told the operator
+      // the cards were charged. Joins were still open and there was still time
+      // to order supply.
+      const row = await stateAt("2026-12-15T07:45:00Z");
+      expect(row.hoursToCutoff).toBe(0);
+      expect(row.state).toBe("closing");
+    });
+
+    it("is `charged` once the window is locked", async () => {
+      await prisma.deliveryWindow.update({
+        where: { id: windowId },
+        data: { status: "locked" },
+      });
+      // Locked is what money moving looks like, whatever the clock says.
+      expect((await stateAt("2026-12-15T09:00:00Z")).state).toBe("charged");
+      expect((await stateAt("2026-12-14T08:00:00Z")).state).toBe("charged");
+      await prisma.deliveryWindow.update({
+        where: { id: windowId },
+        data: { status: "open" },
+      });
+    });
+
+    it("is `overdue` when the cutoff has passed but the window is still open", async () => {
+      // The cron has not run: nothing was charged and the orders are stranded.
+      const row = await stateAt("2026-12-15T09:00:00Z");
+      expect(row.windowStatus).toBe("open");
+      expect(row.state).toBe("overdue");
+    });
+
+    it("flips to `overdue` on the exact cutoff instant, not an hour either side", async () => {
+      expect((await stateAt("2026-12-15T07:59:59Z")).state).toBe("closing");
+      expect((await stateAt("2026-12-15T08:00:00Z")).state).toBe("overdue");
+    });
+  });
+
   it("omits a window nobody has joined", async () => {
     const empty = await prisma.deliveryWindow.create({
       data: {

@@ -17,6 +17,19 @@ export type AdminBasketRow = {
   joinersThisCycle: number;
 };
 
+// What the operator is actually looking at, decided here rather than in the
+// page. The page used to derive "closed" from `hoursToCutoff`, which is rounded
+// to whole hours — so for the 30 minutes before every cutoff it claimed cards
+// had been charged while joins were still open, and it said the same thing
+// about a window the cron had failed to lock. Both were the opposite of true.
+export const CYCLE_STATES = ["open", "closing", "charged", "overdue"] as const;
+export type CycleState = (typeof CYCLE_STATES)[number];
+
+// Under this much time to the cutoff, ordering supply stops being a task for
+// later and becomes a task for now. It is a display threshold only — nothing in
+// the domain changes at this boundary.
+const CLOSING_SOON_MS = 60 * 60 * 1000;
+
 export type CycleRow = {
   windowId: string;
   basketId: string;
@@ -27,6 +40,7 @@ export type CycleRow = {
   cutoffAt: Date;
   windowStatus: string;
   hoursToCutoff: number;
+  state: CycleState;
   joiners: number;
   grams: number;
   bulkWeightGrams: number;
@@ -46,8 +60,28 @@ export type WindowOrderRow = {
 // Whole hours from `now` to `cutoffAt`, negative once the cutoff has passed.
 // The operator's whole job on cutoff day is knowing how long is left, so this
 // is deliberately signed rather than clamped at zero.
+//
+// Rounded, so it is fit for copy and unfit for judgement — see `cycleState`.
 function hoursUntil(cutoffAt: Date, now: Date): number {
   return Math.round((cutoffAt.getTime() - now.getTime()) / (60 * 60 * 1000));
+}
+
+// An exact comparison, never the rounded hour count.
+//
+// `locked` is the only status that means money moved: `cycle-run.ts` locks a
+// window as it charges. So a window still `open` past its cutoff has charged
+// nobody — the cron has not run, and the orders are stranded. That is a fault
+// the operator has to see as a fault, not as a finished cycle.
+export function cycleState(
+  windowStatus: string,
+  cutoffAt: Date,
+  now: Date
+): CycleState {
+  if (windowStatus === "locked") return "charged";
+  const msToCutoff = cutoffAt.getTime() - now.getTime();
+  if (msToCutoff <= 0) return "overdue";
+  if (msToCutoff < CLOSING_SOON_MS) return "closing";
+  return "open";
 }
 
 export async function listAdminBaskets(): Promise<AdminBasketRow[]> {
@@ -115,6 +149,10 @@ export async function listUpcomingCycles(now: Date = new Date()): Promise<CycleR
         tier: { select: { weightGrams: true } },
         basket: { include: { sku: { include: { product: true } } } },
       },
+      // Fixes the basket order within a window. Grouping below is Map-insertion
+      // order, so without this the rows shuffled between renders on a screen an
+      // operator reads down like a shopping list.
+      orderBy: [{ basket: { label: "asc" } }, { createdAt: "asc" }],
     });
 
     // Group by basket: one delivery run carries several foods, but each food is
@@ -143,6 +181,7 @@ export async function listUpcomingCycles(now: Date = new Date()): Promise<CycleR
         cutoffAt: window.cutoffAt,
         windowStatus: window.status,
         hoursToCutoff: hoursUntil(window.cutoffAt, now),
+        state: cycleState(window.status, window.cutoffAt, now),
         joiners: basketOrders.length,
         grams,
         bulkWeightGrams: sku.weightGrams,
