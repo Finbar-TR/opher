@@ -4,6 +4,7 @@ import { z } from "zod";
 import { revalidatePath } from "next/cache";
 import { requireOperator } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { PRODUCT_CATEGORIES } from "@/lib/constants";
 
 // One form creates a product and its first SKU together. Splitting them would
 // mean an operator can save a product they cannot yet sell, which is a state
@@ -11,7 +12,7 @@ import { prisma } from "@/lib/prisma";
 const schema = z.object({
   name: z.string().trim().min(1, "Name the food"),
   description: z.string().trim(),
-  category: z.enum(["dry", "fresh"]),
+  category: z.enum(PRODUCT_CATEGORIES),
   skuLabel: z.string().trim().min(1, "Name the bulk unit, e.g. 25 kg crate"),
   weightKg: z.coerce.number().positive("How many kg is one bulk unit?"),
   wholesaleCostPounds: z.coerce.number().nonnegative("What does one bulk unit cost?"),
@@ -20,7 +21,7 @@ const schema = z.object({
 export async function createProductAction(formData: FormData): Promise<void> {
   await requireOperator();
 
-  const input = schema.parse({
+  const result = schema.safeParse({
     name: formData.get("name"),
     description: formData.get("description") ?? "",
     category: formData.get("category"),
@@ -28,6 +29,13 @@ export async function createProductAction(formData: FormData): Promise<void> {
     weightKg: formData.get("weightKg"),
     wholesaleCostPounds: formData.get("wholesaleCostPounds"),
   });
+
+  if (!result.success) {
+    const firstIssue = result.error.issues[0];
+    throw new Error(firstIssue?.message || "That form isn't quite right — check the values and try again.");
+  }
+
+  const input = result.data;
 
   await prisma.product.create({
     data: {

@@ -4,8 +4,16 @@ import { OperatorNav } from "@/components/operator-nav";
 import { createProductAction } from "./actions";
 import { formatGBP } from "@/lib/money";
 import { formatKg } from "@/lib/weight";
+import { PRODUCT_CATEGORIES } from "@/lib/constants";
 
 export const dynamic = "force-dynamic";
+
+// Keyed by PRODUCT_CATEGORIES so a new category shows up here rather than
+// silently falling back to its raw slug.
+const CATEGORY_LABELS: Record<(typeof PRODUCT_CATEGORIES)[number], string> = {
+  dry: "Dry / shelf-stable",
+  fresh: "Fresh",
+};
 
 export default async function CataloguePage() {
   await requireOperator();
@@ -31,8 +39,11 @@ export default async function CataloguePage() {
           <div>
             <label className="label" htmlFor="category">Category</label>
             <select id="category" name="category" className="input" defaultValue="dry">
-              <option value="dry">Dry / shelf-stable</option>
-              <option value="fresh">Fresh</option>
+              {PRODUCT_CATEGORIES.map((c) => (
+                <option key={c} value={c}>
+                  {CATEGORY_LABELS[c]}
+                </option>
+              ))}
             </select>
           </div>
         </div>
