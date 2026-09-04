@@ -44,6 +44,11 @@ afterAll(async () => {
   await prisma.basket.deleteMany({ where: { cityId } });
   await prisma.city.deleteMany({ where: { id: cityId } });
   await prisma.user.deleteMany({ where: { email: { startsWith: TAG } } });
+  // The SKUs and products `makeSku` creates must go too. Without these two
+  // lines every run left a pair of ZZTEST_ foods behind, and they accumulated
+  // into the operator's own Food dropdown on the baskets screen.
+  await prisma.sku.deleteMany({ where: { product: { name: { startsWith: TAG } } } });
+  await prisma.product.deleteMany({ where: { name: { startsWith: TAG } } });
 });
 
 async function makeSku(label: string) {
