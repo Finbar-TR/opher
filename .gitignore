@@ -44,3 +44,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+.vercel
+.env*
+
+# Local-only production DB connection string used by scripts/*.ps1
+scripts/.db-url
