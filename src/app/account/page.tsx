@@ -21,7 +21,7 @@ export default async function AccountPage() {
 
       {!hasDeliveryAddress(user) && (
         <div className="rounded-xl border border-accent-400 bg-accent-400/15 px-4 py-3 text-sm text-accent-600">
-          Add your delivery address and phone below to start claiming portions.
+          Add your delivery address and phone below to start joining baskets.
         </div>
       )}
 

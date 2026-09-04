@@ -11,14 +11,7 @@ export function poundsToPence(pounds: number): number {
   return Math.round(pounds * 100);
 }
 
-// Savings of the group price against a typical shop price (both in pence).
-// Returns null when there's no shop price or no actual saving.
-export function savings(
-  pricePerPortion: number,
-  shopPricePerPortion: number | null | undefined
-): { perPortion: number; percent: number } | null {
-  if (!shopPricePerPortion || shopPricePerPortion <= pricePerPortion) return null;
-  const perPortion = shopPricePerPortion - pricePerPortion;
-  const percent = Math.round((perPortion / shopPricePerPortion) * 100);
-  return { perPortion, percent };
+// Price per kilogram, for the tier ladder. Input is pence per kg.
+export function formatPricePerKg(pencePerKg: number): string {
+  return `${formatGBP(pencePerKg)}/kg`;
 }

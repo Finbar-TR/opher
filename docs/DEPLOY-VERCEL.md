@@ -2,8 +2,8 @@
 
 The app runs on **Vercel** (built for Next.js, free Hobby tier), the database is a free
 managed **Neon Postgres**, and **morsetltd.com** stays registered at Hostinger — you
-just point its DNS at Vercel. The auto-expiry cron runs on **Vercel Cron** (built in,
-no external scheduler).
+just point its DNS at Vercel. The daily cutoff-and-charge cron runs on **Vercel Cron**
+(built in, no external scheduler).
 
 Local dev stays on SQLite; the `prebuild` step selects the Postgres provider from the
 Neon `DATABASE_URL` automatically.
@@ -67,18 +67,34 @@ git branch -M main && git push -u origin main
 3. Wait for DNS to propagate (minutes to a couple of hours). Vercel issues HTTPS
    automatically. Then update `APP_URL` to `https://morsetltd.com` and redeploy.
 
-## 5. Auto-expiry cron (already wired)
+## 5. The daily cycle cron (already wired)
 
-`vercel.json` schedules `/api/cron/expire` daily at 02:00 UTC. Because `CRON_SECRET`
-is set, Vercel automatically sends `Authorization: Bearer <CRON_SECRET>`, which the
-endpoint checks — nothing else to configure. (Daily is the Hobby-plan cadence; a paid
-plan can run it more often.)
+`vercel.json` schedules `/api/cron/cycles` daily at **08:00 UTC**. Because
+`CRON_SECRET` is set, Vercel automatically sends `Authorization: Bearer <CRON_SECRET>`,
+which the endpoint checks — nothing else to configure. The route accepts that header
+and nothing else: there is no `?key=` fallback, because a secret in a query string ends
+up in access logs permanently.
+
+**The hour is load-bearing — do not change it casually.** 08:00 UTC is the hour every
+delivery window's cutoff falls at (`CUTOFF_HOUR_UTC` in `src/lib/constants.ts`), and
+the cutoff *is* the charge: this run locks each window whose moment has come and
+charges every committed order in it. Move the schedule later and every customer is
+charged late; move it earlier and windows are not yet due, so the run does nothing and
+the charges wait a further day. If you ever change `CUTOFF_HOUR_UTC`, change the cron
+expression in `vercel.json` to match.
+
+A run that ends with a non-zero `needsManualReview` or `strandedOrders`, or that
+returns 503 (Stripe rejected our credentials — nobody was charged), needs a human.
+
+(Daily is the Hobby-plan cadence, which is all this needs; the run is re-entrant, so a
+missed day is picked up by the next one.)
 
 ## 6. Stripe webhook
 
-In the Stripe dashboard add an endpoint
-`https://morsetltd.com/api/stripe/webhook` for `checkout.session.completed`, then put
-its signing secret into the `STRIPE_WEBHOOK_SECRET` env var and redeploy.
+In the Stripe dashboard add an endpoint `https://morsetltd.com/api/stripe/webhook`
+subscribed to `setup_intent.succeeded`, `payment_intent.succeeded` and
+`payment_intent.payment_failed` — the three events the route handles. Put its signing
+secret into the `STRIPE_WEBHOOK_SECRET` env var and redeploy.
 
 ## 7. Redeploys
 

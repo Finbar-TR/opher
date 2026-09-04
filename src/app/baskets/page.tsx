@@ -1,75 +1,64 @@
 import Link from "next/link";
-import { requireUser } from "@/lib/auth";
+import { listOpenBaskets } from "@/lib/basket-views";
+import { BasketCard } from "@/components/basket-card";
 import { prisma } from "@/lib/prisma";
-import { ProgressBar, BasketStatusBadge } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
 
-export default async function MyBasketsPage() {
-  const user = await requireUser();
-
-  const baskets = await prisma.basket.findMany({
-    where: {
-      OR: [{ organiserId: user.id }, { claims: { some: { userId: user.id } } }],
-    },
-    include: { commodity: true, claims: true },
-    orderBy: { createdAt: "desc" },
-  });
+// No login required to browse.
+export default async function BasketsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ city?: string }>;
+}) {
+  const { city } = await searchParams;
+  const [baskets, cities] = await Promise.all([
+    listOpenBaskets(city),
+    prisma.city.findMany({ where: { active: true }, orderBy: { name: "asc" } }),
+  ]);
 
   return (
-    <div>
-      <div className="mb-6 flex items-end justify-between gap-4">
-        <div>
-          <h1 className="font-display text-[38px] leading-tight text-ink sm:text-[46px]">
-            My baskets
-          </h1>
-          <p className="mt-1 text-muted">Baskets you organise or have joined.</p>
-        </div>
-        <Link href="/catalog" className="btn-primary">
-          Start a basket
+    <div className="space-y-8">
+      <div>
+        <h1 className="font-display text-[38px] leading-tight text-ink">Baskets near you</h1>
+        <p className="mt-1 text-muted">
+          Join before a basket closes. Your card is saved now and charged when it
+          closes — cancel free until then.
+        </p>
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        <Link
+          href="/baskets"
+          className={`badge ${!city ? "bg-brand-700 text-white" : "bg-brand-50 text-brand-800"}`}
+        >
+          All cities
         </Link>
+        {cities.map((c) => (
+          <Link
+            key={c.id}
+            href={`/baskets?city=${c.slug}`}
+            className={`badge ${city === c.slug ? "bg-brand-700 text-white" : "bg-brand-50 text-brand-800"}`}
+          >
+            {c.name}
+          </Link>
+        ))}
       </div>
 
       {baskets.length === 0 ? (
-        <div className="card text-center text-soft">
-          You haven&apos;t joined any baskets yet.{" "}
-          <Link href="/catalog" className="font-bold text-tomato hover:underline">
-            Browse the catalog
-          </Link>{" "}
-          to begin.
+        <div className="card text-center">
+          <p className="font-display text-2xl text-ink">
+            No baskets in your city yet
+          </p>
+          <p className="mt-2 text-muted">
+            We&apos;re opening new cities as demand grows — check back soon.
+          </p>
         </div>
       ) : (
-        <div className="grid gap-5 sm:grid-cols-2">
-          {baskets.map((b) => {
-            const filled = b.claims.reduce((s, c) => s + c.portions, 0);
-            const fulfilling = b.status === "ordered" || b.status === "fulfilled";
-            return (
-              <Link
-                key={b.id}
-                href={fulfilling && b.orderId ? `/orders/${b.orderId}` : `/baskets/${b.id}`}
-                className="card transition hover:border-line-strong hover:shadow-[0_8px_20px_rgba(122,60,20,0.10)]"
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <h2 className="font-display text-[24px] leading-tight text-ink sm:text-[26px]">
-                    {b.title}
-                  </h2>
-                  <BasketStatusBadge status={b.status} />
-                </div>
-                <p className="mt-1 text-[13px] font-semibold text-soft">
-                  {b.commodity.name} · {b.commodity.bulkUnitLabel}
-                </p>
-                <div className="mt-4">
-                  <ProgressBar filled={filled} total={b.targetPortions} />
-                  <p className="mt-1 text-xs font-semibold text-soft">
-                    {filled}/{b.targetPortions} portions
-                  </p>
-                </div>
-                <p className="mt-4 text-sm font-bold text-tomato">
-                  {fulfilling ? "Track delivery →" : "Open basket →"}
-                </p>
-              </Link>
-            );
-          })}
+        <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+          {baskets.map((b) => (
+            <BasketCard key={b.id} basket={b} />
+          ))}
         </div>
       )}
     </div>

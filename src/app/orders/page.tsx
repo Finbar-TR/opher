@@ -1,76 +1,46 @@
 import Link from "next/link";
 import { requireUser } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
+import { listUserOrders } from "@/lib/basket-views";
+import { OrderStatusBadge } from "@/components/order-status-badge";
 import { formatGBP } from "@/lib/money";
-import { formatDate } from "@/lib/dates";
-import { OrderStatusBadge, PhotoSlot } from "@/components/ui";
+import { formatWeekday } from "@/lib/dates";
 
 export const dynamic = "force-dynamic";
 
 export default async function OrdersPage() {
   const user = await requireUser();
-
-  const orders = await prisma.order.findMany({
-    where: { payments: { some: { userId: user.id } } },
-    include: { commodity: true, payments: { where: { userId: user.id } } },
-    orderBy: { createdAt: "desc" },
-  });
+  const orders = await listUserOrders(user.id);
 
   return (
-    <div>
-      <h1 className="font-display text-[38px] leading-tight text-ink sm:text-[46px]">
-        Orders
-      </h1>
-      <p className="mt-1 text-muted">Bulk buys you&apos;re part of, and their delivery.</p>
+    <div className="mx-auto max-w-2xl space-y-6">
+      <h1 className="font-display text-[38px] leading-tight text-ink">Your baskets</h1>
 
       {orders.length === 0 ? (
-        <div className="card mt-6 text-center text-soft">
-          No orders yet. Orders appear once your basket merges into a whole unit.
+        <div className="card text-center">
+          <p className="font-display text-2xl text-ink">You haven&apos;t joined a basket yet</p>
+          <Link href="/baskets" className="btn-primary mt-4 inline-block">Browse baskets</Link>
         </div>
       ) : (
-        <div className="mt-6 space-y-4">
-          {orders.map((o) => {
-            const mine = o.payments[0];
-            const needsPay =
-              mine.status !== "paid" && o.status === "pending_payment";
-            return (
-              <Link
-                key={o.id}
-                href={`/orders/${o.id}`}
-                className="flex items-center gap-4 rounded-[22px] border border-line bg-surface p-4 transition hover:border-line-strong hover:shadow-[0_8px_20px_rgba(122,60,20,0.10)]"
-              >
-                <PhotoSlot
-                  caption={o.commodity.name}
-                  imageUrl={o.commodity.imageUrl}
-                  className="h-[76px] w-[76px] shrink-0 rounded-2xl"
-                />
-                <div className="min-w-0 flex-1">
-                  <p className="font-display text-[22px] leading-tight text-ink sm:text-[26px]">
-                    {o.commodity.name}
+        <div className="space-y-3">
+          {orders.map((o) => (
+            <Link key={o.id} href={`/orders/${o.id}`} className="card block transition hover:border-line-strong">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="font-display text-xl text-ink">{o.productName}</p>
+                  <p className="mt-1 text-sm text-muted">
+                    {o.city} · {o.tierLabel}
                   </p>
-                  <p className="text-sm text-soft">
-                    {o.bulkUnits} × {o.commodity.bulkUnitLabel} · your share{" "}
-                    {mine.portions} portion(s) · {formatGBP(mine.amount)}
+                  <p className="mt-1 text-sm text-muted">
+                    Delivery {formatWeekday(o.deliveryDate)}
                   </p>
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                    {mine.status === "paid" ? (
-                      <span className="inline-flex items-center rounded-full bg-saffron px-3 py-1 text-[11px] font-bold text-saffron-ink">
-                        Paid
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center rounded-full bg-tomato px-3 py-1 text-[11px] font-bold text-[#fffaf3]">
-                        {o.paymentDueAt ? `Pay by ${formatDate(o.paymentDueAt)}` : "Payment due"}
-                      </span>
-                    )}
-                    <OrderStatusBadge status={o.status} />
-                  </div>
                 </div>
-                <span className="shrink-0 text-sm font-bold text-tomato">
-                  {needsPay ? `Pay ${formatGBP(mine.amount)} →` : "Track →"}
-                </span>
-              </Link>
-            );
-          })}
+                <div className="text-right">
+                  <OrderStatusBadge status={o.status} />
+                  <p className="mt-2 font-semibold text-ink">{formatGBP(o.totalPence)}</p>
+                </div>
+              </div>
+            </Link>
+          ))}
         </div>
       )}
     </div>

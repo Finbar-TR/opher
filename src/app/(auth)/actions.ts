@@ -23,7 +23,7 @@ export type AuthState = { error?: string; ok?: string };
 function safeNext(next: FormDataEntryValue | null): string {
   const value = typeof next === "string" ? next : "";
   if (value.startsWith("/") && !value.startsWith("//")) return value;
-  return "/catalog";
+  return "/";
 }
 
 const signUpSchema = z.object({

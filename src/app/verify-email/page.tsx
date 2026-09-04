@@ -35,8 +35,8 @@ export default async function VerifyEmailPage({
             ? "Thanks — your email address is verified."
             : "This verification link is no longer valid. You can request a new one from your account."}
         </p>
-        <Link href={ok ? "/catalog" : "/account"} className="mt-6 inline-block btn-primary">
-          {ok ? "Browse the catalog" : "Go to account"}
+        <Link href={ok ? "/" : "/account"} className="mt-6 inline-block btn-primary">
+          {ok ? "Go to Opher" : "Go to account"}
         </Link>
       </div>
     </div>

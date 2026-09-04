@@ -1,10 +1,10 @@
 # Opher
 
-A food aggregation & bulk-buying **PWA** for the UK. Members create baskets for a
-commodity, invite others, and Opher's **merge engine** combines part-filled baskets
-for the same item into whole bulk units (e.g. `2/5 + 3/5 = 5/5` of a 25 kg sack).
-Each participant pays only their share (collect-on-order via Stripe), and delivery
-is tracked to the door.
+A food aggregation & bulk-buying **PWA** for the UK. Each city runs a delivery
+twice a month; members **join** a basket for a food in their city, choosing a
+quantity tier. The basket closes at the city's cutoff (3 days before delivery,
+by default) — every joined order is charged and the operator buys supply for
+the delivery by hand.
 
 Built with **Next.js 16 (App Router) · Prisma · SQLite (dev) / Postgres (prod) ·
 Stripe · Tailwind v4**. Installable as a PWA — no app-store fees.
@@ -15,7 +15,7 @@ Stripe · Tailwind v4**. Installable as a PWA — no app-store fees.
 npm install
 cp .env.example .env         # defaults work for local dev
 npm run db:push              # create the SQLite schema
-npm run db:seed              # operator + members + sample catalog
+npm run db:seed              # operator + members + cities + catalogue + baskets
 npm run dev                  # http://localhost:3000
 ```
 
@@ -27,23 +27,26 @@ npm run dev                  # http://localhost:3000
 | `aisha@opher.test`    | member   |
 | `ben@opher.test`      | member   |
 
-Optional: `npx tsx scripts/seed-scenario.ts` adds an open basket and one
-in-delivery order for clicking through the UI.
+Optional: `npx tsx scripts/seed-scenario.ts` adds joined orders for clicking
+through the UI — a basket with several joiners, one with a single joiner, one
+whose window is closing soon, and one with a mix of committed/paid/cancelled
+orders.
 
 ## The flow
 
-1. **Operator** curates the catalog at `/operator/commodities` — each commodity has a
-   bulk unit (e.g. 25 kg sack) split into a fixed number of portions.
-2. A **member** opens a basket from a commodity, choosing how many portions their
-   group wants, and invites others (shareable code / `/join/<code>` link).
-3. Members **claim portions**; the basket page is a shared ledger of who owes what.
-4. The organiser **commits**. The [merge engine](src/lib/merge.ts) pools committed
-   baskets for that commodity and forms an **order** for each whole bulk unit
-   (`src/lib/merge-orders.ts`). Operators can also merge manually at `/operator/demand`.
-5. Each participant **pays their share** (Stripe Checkout, or a dev fallback when no
-   Stripe key is set). The order settles to `paid` once every share is in.
-6. The **operator** advances fulfilment (`bought → out for delivery → delivered`) at
-   `/operator/orders`; members watch the live timeline on their order.
+1. **Operator** sets each city's delivery schedule — a fortnightly date series
+   and how many days before delivery joining closes (default 3).
+2. **Operator** curates products and SKUs, then opens a **basket** for one food
+   in one city, with 2–4 quantity tiers (e.g. 2 kg £9.50 … 20 kg £72).
+3. A **member** browses baskets in their city and **joins** one, choosing a
+   tier. Their card is saved but not charged.
+4. At the city's cutoff (its own days-before-delivery setting, 3 by default) the
+   window **closes** at 08:00 UTC, and **every** committed order in it is
+   charged — there is no minimum demand: two joiners are supplied as readily
+   as ten. There is no rollover lever yet, so pulling a delivery after that
+   point means refunding it.
+5. The **operator** buys the goods by hand from the supplier and delivers on
+   the city's delivery date.
 
 ## Scripts
 
@@ -51,14 +54,17 @@ in-delivery order for clicking through the UI.
 | ------------------- | -------------------------------------- |
 | `npm run dev`       | Dev server                             |
 | `npm run build`     | Production build                       |
-| `npm test`          | Vitest (merge engine + DB integration) |
+| `npm test`          | Vitest (cycle logic + DB integration)  |
 | `npm run db:push`   | Sync schema to the database            |
 | `npm run db:seed`   | Seed accounts + catalog                |
 | `npm run db:studio` | Prisma Studio                          |
 
 ## Payments (Stripe)
 
-Local dev works **without** Stripe: paying a share settles it directly. To use real
+Joining a basket saves a card with a Stripe SetupIntent — no charge yet. The card is
+only charged at the window's cutoff, by the daily cron below. Local dev works
+**without** Stripe: joining and charging both use synthetic ids and report success,
+so the whole join → cutoff → charge path is clickable with no keys set. To use real
 (test-mode) payments, set `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` in `.env`
 and forward webhooks:
 
@@ -66,52 +72,129 @@ and forward webhooks:
 stripe listen --forward-to localhost:3000/api/stripe/webhook
 ```
 
-Money is stored in integer **pence** throughout. Opher never holds pooled funds —
-each share is charged at order time, which keeps it clear of UK e-money licensing.
-**Do not** add a "top up in advance" wallet without regulatory advice.
+Money is stored in integer **pence** throughout, weights in integer **grams**.
+Opher never holds pooled funds — a card is charged only once, at cutoff, which keeps
+it clear of UK e-money licensing. **Do not** add a "top up in advance" wallet without
+regulatory advice.
 
 ## Notifications (email)
 
-Transactional emails fire when an order is created (pay your share), on each
-delivery status change, and on cancellation/refund — plus password-reset and
-email-verification links. In dev with no `RESEND_API_KEY`, emails are logged to the
-console. Set `RESEND_API_KEY` + `EMAIL_FROM` to send for real.
+Password-reset and email-verification links are sent, alongside four order emails:
+join confirmation, payment succeeded, payment failed, and order cancelled/released.
+In dev with no `RESEND_API_KEY`, emails are logged to the console instead of sent.
+Set `RESEND_API_KEY` + `EMAIL_FROM` to send for real.
 
 ## Deploying
 
 The full deploy guide (**Vercel** + free **Neon Postgres**, with the domain pointed
-from Hostinger and the expiry cron on Vercel Cron) is in
+from Hostinger and the delivery-cycle cron on Vercel Cron) is in
 [docs/DEPLOY-VERCEL.md](docs/DEPLOY-VERCEL.md). Local dev stays on SQLite; the
 `prebuild` step selects the Prisma provider from `DATABASE_URL` automatically
 (`file:` → sqlite, `postgres://` → postgresql, `mysql://` → mysql).
 
-## Auto-expiry (scheduled)
+## Delivery cycles (scheduled)
 
-`GET|POST /api/cron/expire` (guarded by `CRON_SECRET`) cancels open/committed baskets
-past their close date and cancels + refunds `pending_payment` orders past their due
-date. It runs on **Vercel Cron** (configured in `vercel.json`; Vercel auto-sends the
-`CRON_SECRET`). Basket close windows are set per-basket at creation; order payment
-windows default to 3 days.
+`GET|POST /api/cron/cycles` (guarded by `CRON_SECRET`) runs daily at **08:00
+UTC** — the hour every window's cutoff falls at, because the cutoff and the charge
+are the same moment. Each run:
+
+1. **Reconciles** any charge attempt an earlier, interrupted run left unresolved,
+   against Stripe — never against a guess.
+2. **Advances** windows: dispatches deliveries whose date has passed, and opens new
+   windows so every city always has its next two deliveries visible.
+3. **Locks** every window whose cutoff has arrived and **charges** every committed
+   order in it.
+4. **Retries** charges that failed, up to the retry budget, and releases orders that
+   exhaust it.
+
+It runs on **Vercel Cron** (configured in `vercel.json`; Vercel auto-sends the
+`CRON_SECRET`).
+
+### Payment safety
+
+Charging happens once, by design, even across a crashed or overlapping run:
+
+- Every attempt is **recorded before the Stripe call is made** (`PaymentAttempt`,
+  written `pending`), so a process that dies mid-charge always leaves evidence that
+  a charge may have happened.
+- An interrupted attempt is never assumed to have failed. The next run
+  **reconciles it against Stripe** — asking what actually happened — before
+  touching that order again, so an interrupted run cannot double-charge.
+- If reconciliation ever finds two successful charges for one attempt, the
+  duplicate is **detected and refunded automatically**, leaving the order charged
+  correctly exactly once.
 
 ## Environment variables
 
 `DATABASE_URL` (`file:` sqlite / `mysql://` / `postgres://`), `SESSION_SECRET`,
-`APP_URL`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `RESEND_API_KEY`,
-`EMAIL_FROM`, `CRON_SECRET` — see `.env.example`. Regenerate PWA icons with
-`npm run gen:icons`. Before a public launch, have a solicitor review `/privacy`,
-`/terms`, `/cookies` (UK-oriented templates) and confirm food-hygiene registration if
+`APP_URL`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`,
+`NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY`, `RESEND_API_KEY`, `EMAIL_FROM`,
+`CRON_SECRET` — see `.env.example`. `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` is the
+browser key Stripe Elements uses to collect a card during join; without it the
+join flow falls back to a keyless dev path that saves a placeholder card
+instead of calling Stripe. Regenerate PWA icons with `npm run gen:icons`.
+Before a public launch, have a solicitor review `/privacy`, `/terms`,
+`/cookies` (UK-oriented templates) and confirm food-hygiene registration if
 you handle food.
 
 ## What's covered
 
-- Accounts with email verification, password reset, rate-limited login, and an account
-  page (name, **delivery address**, password).
-- Operator-curated catalog; baskets with a shared ledger; the merge engine; per-share
-  Stripe payments (dev fallback without keys); manual delivery tracking.
-- Basket lifecycle (re-open, cancel, remove member) and operator order **cancel +
-  refund** for stuck/unpaid orders.
+- Accounts with email verification, password reset, rate-limited login, and an
+  account page (name, **delivery address**, password).
+- City delivery schedules; an operator-curated catalogue of products and SKUs;
+  admin-created baskets with 2–4 quantity tiers priced per kg.
+- Browsing baskets by city and joining one with a card saved via Stripe
+  Elements — a three-step flow (address, size, card) that never charges at
+  join time.
+- My-orders, with free cancellation until the basket closes.
+- Four order emails — join confirmation, payment succeeded, payment failed,
+  and order cancelled/released — alongside the existing password-reset and
+  email-verification mail.
+- The cutoff cron charges every committed order in a window at its city's
+  cutoff, with no minimum demand, automatic payment retries, and operator
+  refunds for a single order or a whole delivery.
+
+## Operator
+
+Operator screens live under `/operator`, reachable only by an account with the
+`operator` role. A signed-out visitor is redirected to `/sign-in`; a signed-in
+member is redirected to `/`.
+
+- **Catalogue** (`/operator/catalogue`) — add a food and the bulk unit it's
+  bought in (a label, a weight, a wholesale cost) in one form; the list below
+  shows what's already in the catalogue.
+- **Baskets** (`/operator/baskets`) — open a basket for one food in one city
+  with 2–4 quantity tiers, then **pause**, **resume**, or **archive** it.
+  Archived baskets are listed separately below the active ones and can be
+  **restored**. Only one live basket per SKU per city is allowed at a time —
+  the check keys on the bulk unit, so two SKUs of the same food would each
+  permit a basket in the same city.
+- **What to buy** (`/operator/cycles`) — every upcoming delivery with
+  joiners, how many bulk units to order, and how long is left before the
+  cutoff charges the cards. A cutoff that has passed while its window is still
+  open is flagged as such: nothing was charged and the cron has not run.
+  "See orders" opens a window's order list, where a single `paid` order can be
+  **refunded** — or the whole delivery at once, which covers every food in
+  that city's run, not just the one you arrived from.
+
+What's **not** here yet:
+
+- **City schedules** — cadence, anchor date, cutoff days, active toggle — are
+  seeded and changed directly in the database; there is no screen for them.
+- **No rollover lever.** Until it exists, a thin window can only be pulled by
+  refunding it after the cards have already been charged.
+- **No resolver** for a payment stuck in `payment_pending`, awaiting a human.
+- **No self-service way for a customer to fix a failed card.** A failed
+  payment is a dead end today.
+- **No editing a basket after creation** — its label, or adding/disabling a
+  tier. A mistyped price or size means archiving the basket and starting
+  again.
+- **No refund notification email.** A refunded customer is told nothing by the
+  app; the money simply returns to their card. Refunds are routine now that
+  there is a screen for them, which is what makes the silence worth stating.
 
 ## Roadmap
 
-Courier-API tracking, richer multi-unit bin-packing merges, a supplier marketplace,
-push notifications, and Capacitor store wrappers.
+City-schedule screens for the operator; rolling a thin window over to the next
+delivery date instead of running it; courier-API tracking; a supplier
+marketplace; push notifications; and Capacitor store wrappers.

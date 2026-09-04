@@ -1,9 +1,9 @@
 import "server-only";
-import { prisma } from "./prisma";
 import { sendEmail, emailLayout, emailButton } from "./email";
-import { formatGBP } from "./money";
-import { ORDER_STATUS_LABELS, type OrderStatus } from "./constants";
 import { sanitizeAppUrl } from "./base-url";
+import { prisma } from "./prisma";
+import { formatGBP } from "./money";
+import { formatWeekday } from "./dates";
 
 const appUrl = () => sanitizeAppUrl();
 
@@ -42,93 +42,90 @@ export async function sendVerificationEmail(
   });
 }
 
-// "Your basket merged — pay your share" to each participant of a new order.
-export async function sendOrderCreatedEmails(orderId: string): Promise<void> {
-  const order = await prisma.order.findUnique({
-    where: { id: orderId },
-    include: { commodity: true, payments: { include: { user: true } } },
-  });
-  if (!order) return;
+// Order emails. None of these may suggest a charge is conditional: every
+// committed order is charged at its window's cutoff.
 
-  for (const p of order.payments) {
-    await sendEmail({
-      to: p.user.email,
-      subject: `Pay your share — ${order.commodity.name}`,
-      html: emailLayout(
-        `<p>Hi ${p.user.name},</p>
-         <p>Your basket for <strong>${order.commodity.name}</strong> merged into a bulk order.
-         Your share is <strong>${formatGBP(p.amount)}</strong> for ${p.portions} portion(s).</p>
-         <p>The order is bought once everyone has paid.</p>
-         ${emailButton(`${appUrl()}/orders/${orderId}`, "Pay my share")}`
-      ),
-    });
-  }
+const orderInclude = {
+  user: { select: { email: true, name: true } },
+  tier: { select: { label: true } },
+  basket: { include: { city: { select: { name: true } }, sku: { include: { product: { select: { name: true } } } } } },
+  window: { select: { deliveryDate: true } },
+} as const;
+
+async function loadOrder(orderId: string) {
+  return prisma.order.findUnique({ where: { id: orderId }, include: orderInclude });
 }
 
-// Basket closed automatically (deadline passed) without merging.
-export async function sendBasketExpiredEmails(basketId: string): Promise<void> {
-  const basket = await prisma.basket.findUnique({
-    where: { id: basketId },
-    include: { commodity: true, claims: { include: { user: true } } },
-  });
-  if (!basket) return;
-
-  for (const c of basket.claims) {
-    await sendEmail({
-      to: c.user.email,
-      subject: `Basket closed — ${basket.title}`,
-      html: emailLayout(
-        `<p>Hi ${c.user.name},</p>
-         <p>The basket <strong>${basket.title}</strong> for ${basket.commodity.name}
-         closed before it filled a whole ${basket.commodity.bulkUnitLabel}, so no order
-         was placed and you haven't been charged.</p>
-         ${emailButton(`${appUrl()}/catalog`, "Start a new basket")}`
-      ),
-    });
-  }
+function orderLine(o: NonNullable<Awaited<ReturnType<typeof loadOrder>>>): string {
+  return `${o.basket.sku.product.name} — ${o.tier.label} (${o.basket.city.name})`;
 }
 
-// Delivery status update to each participant.
-export async function sendOrderStatusEmails(orderId: string): Promise<void> {
-  const order = await prisma.order.findUnique({
-    where: { id: orderId },
-    include: { commodity: true, payments: { include: { user: true } } },
-  });
-  if (!order) return;
+export async function sendJoinConfirmation(orderId: string): Promise<void> {
+  const o = await loadOrder(orderId);
+  if (!o) return;
 
-  const label = ORDER_STATUS_LABELS[order.status as OrderStatus] ?? order.status;
-  for (const p of order.payments) {
-    await sendEmail({
-      to: p.user.email,
-      subject: `${order.commodity.name} — ${label}`,
-      html: emailLayout(
-        `<p>Hi ${p.user.name},</p>
-         <p>Your <strong>${order.commodity.name}</strong> order is now: <strong>${label}</strong>.</p>
-         ${emailButton(`${appUrl()}/orders/${orderId}`, "Track delivery")}`
-      ),
-    });
-  }
+  await sendEmail({
+    to: o.user.email,
+    subject: `You're in — ${o.basket.sku.product.name}`,
+    html: emailLayout(
+      `<p>Hi ${o.user.name},</p>
+       <p>You've joined <strong>${orderLine(o)}</strong> for ${formatGBP(o.totalPence)}.</p>
+       <p>Delivery is <strong>${formatWeekday(o.window.deliveryDate)}</strong>.</p>
+       <p>We'll charge your card on <strong>${formatWeekday(o.cancellationDeadline)}</strong>.
+          You can cancel free any time before then.</p>
+       ${emailButton(`${appUrl()}/orders/${o.id}`, "View your order")}`
+    ),
+  });
 }
 
-// Cancellation + refund notice to each participant.
-export async function sendOrderCancelledEmails(orderId: string): Promise<void> {
-  const order = await prisma.order.findUnique({
-    where: { id: orderId },
-    include: { commodity: true, payments: { include: { user: true } } },
-  });
-  if (!order) return;
+export async function sendChargeSucceeded(orderId: string): Promise<void> {
+  const o = await loadOrder(orderId);
+  if (!o) return;
 
-  for (const p of order.payments) {
-    const refunded = p.status === "refunded";
-    await sendEmail({
-      to: p.user.email,
-      subject: `${order.commodity.name} — order cancelled`,
-      html: emailLayout(
-        `<p>Hi ${p.user.name},</p>
-         <p>Your <strong>${order.commodity.name}</strong> order has been cancelled.</p>
-         ${refunded ? `<p>Your payment of ${formatGBP(p.amount)} has been refunded.</p>` : ""}
-         ${emailButton(`${appUrl()}/catalog`, "Start a new basket")}`
-      ),
-    });
-  }
+  await sendEmail({
+    to: o.user.email,
+    subject: `Payment received — ${o.basket.sku.product.name}`,
+    html: emailLayout(
+      `<p>Hi ${o.user.name},</p>
+       <p>We've charged ${formatGBP(o.totalPence)} for <strong>${orderLine(o)}</strong>.</p>
+       <p>Delivery is <strong>${formatWeekday(o.window.deliveryDate)}</strong>.</p>
+       ${emailButton(`${appUrl()}/orders/${o.id}`, "View your order")}`
+    ),
+  });
+}
+
+export async function sendChargeFailed(orderId: string): Promise<void> {
+  const o = await loadOrder(orderId);
+  if (!o) return;
+
+  await sendEmail({
+    to: o.user.email,
+    subject: `Payment problem — ${o.basket.sku.product.name}`,
+    html: emailLayout(
+      `<p>Hi ${o.user.name},</p>
+       <p>We couldn't take payment for <strong>${orderLine(o)}</strong>.</p>
+       <p>We'll try again automatically over the next couple of days. If it still
+          doesn't go through, we'll release the order and you won't be charged —
+          you're welcome to join a later basket instead.</p>
+       <p>Just reply to this email if you'd like to talk to a person about it.</p>
+       ${emailButton(`${appUrl()}/orders/${o.id}`, "View your order")}`
+    ),
+  });
+}
+
+export async function sendOrderReleased(orderId: string): Promise<void> {
+  const o = await loadOrder(orderId);
+  if (!o) return;
+
+  await sendEmail({
+    to: o.user.email,
+    subject: `Order cancelled — ${o.basket.sku.product.name}`,
+    html: emailLayout(
+      `<p>Hi ${o.user.name},</p>
+       <p>We weren't able to take payment for <strong>${orderLine(o)}</strong>,
+          so we've cancelled it. You have <strong>not been charged</strong>.</p>
+       <p>You're welcome to join the next delivery whenever you like.</p>
+       ${emailButton(`${appUrl()}/baskets`, "Browse baskets")}`
+    ),
+  });
 }

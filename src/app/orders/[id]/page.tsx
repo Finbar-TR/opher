@@ -1,12 +1,11 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireUser } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
-import { formatGBP, savings } from "@/lib/money";
-import { formatDate } from "@/lib/dates";
-import { requestBaseUrl } from "@/lib/base-url";
-import { OrderStatusBadge, DeliveryTimeline } from "@/components/ui";
-import { payShareAction } from "../actions";
+import { getUserOrder } from "@/lib/basket-views";
+import { OrderStatusBadge } from "@/components/order-status-badge";
+import { cancelOrderAction } from "../actions";
+import { formatGBP } from "@/lib/money";
+import { formatWeekday } from "@/lib/dates";
 
 export const dynamic = "force-dynamic";
 
@@ -15,184 +14,76 @@ export default async function OrderDetailPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ paid?: string }>;
+  searchParams: Promise<{ joined?: string; cancelFailed?: string }>;
 }) {
-  const user = await requireUser();
   const { id } = await params;
-  const { paid } = await searchParams;
-
-  const order = await prisma.order.findUnique({
-    where: { id },
-    include: {
-      commodity: true,
-      payments: { include: { user: true }, orderBy: { createdAt: "asc" } },
-      events: { orderBy: { createdAt: "asc" } },
-      baskets: true,
-    },
-  });
+  const { joined, cancelFailed } = await searchParams;
+  const user = await requireUser();
+  const order = await getUserOrder(id, user.id);
   if (!order) notFound();
 
-  const myPayment = order.payments.find((p) => p.userId === user.id);
-  const isParticipant = Boolean(myPayment);
-  if (!isParticipant && user.role !== "operator") notFound();
-
-  const totalPortions = order.payments.reduce((s, p) => s + p.portions, 0);
-  const totalAmount = order.payments.reduce((s, p) => s + p.amount, 0);
-  const allPaid = order.payments.every((p) => p.status === "paid");
-
-  const sv = savings(
-    order.commodity.pricePerPortion,
-    order.commodity.shopPricePerPortion
-  );
-  const totalSavings = sv ? sv.perPortion * totalPortions : 0;
-  const appUrl = await requestBaseUrl();
-  const shareText = `We saved ${formatGBP(totalSavings)} bulk-buying ${order.commodity.name} together on Opher! ${appUrl}/catalog/${order.commodityId}`;
-  const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(shareText)}`;
-
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
-      <div>
-        <Link href="/orders" className="text-sm text-muted hover:underline">
-          ← Orders
-        </Link>
-        <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
-          <h1 className="font-display text-[38px] leading-tight text-ink sm:text-[46px]">
-            {order.commodity.name}
-          </h1>
+    <div className="mx-auto max-w-xl space-y-6">
+      <Link href="/orders" className="text-sm text-muted hover:underline">← Your baskets</Link>
+
+      {joined === "1" && (
+        <div className="rounded-xl border border-line bg-brand-50 p-4">
+          <p className="font-display text-2xl text-ink">You&apos;re in!</p>
+          <p className="mt-1 text-muted">
+            We&apos;ll charge your card on {formatWeekday(order.cancellationDeadline)}.
+          </p>
+        </div>
+      )}
+
+      {cancelFailed === "1" && (
+        <p className="rounded-xl border border-line bg-saffron p-4 text-sm font-medium text-saffron-ink">
+          We couldn&apos;t cancel this order — its basket has now closed and payment is already
+          being taken. You&apos;ll get a receipt shortly.
+        </p>
+      )}
+
+      <div className="card">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h1 className="font-display text-[28px] leading-tight text-ink">{order.productName}</h1>
+            <p className="mt-1 text-muted">{order.city} · {order.tierLabel}</p>
+          </div>
           <OrderStatusBadge status={order.status} />
         </div>
-        <p className="mt-1 text-soft">
-          {order.bulkUnits} × {order.commodity.bulkUnitLabel} · {totalPortions}{" "}
-          portions · {formatGBP(totalAmount)} total
+
+        <dl className="mt-5 space-y-2 text-[15px]">
+          <div className="flex justify-between">
+            <dt className="text-muted">Price</dt>
+            <dd className="font-semibold text-ink">{formatGBP(order.totalPence)}</dd>
+          </div>
+          <div className="flex justify-between">
+            <dt className="text-muted">Delivery</dt>
+            <dd className="text-ink">{formatWeekday(order.deliveryDate)}</dd>
+          </div>
+          <div className="flex justify-between">
+            <dt className="text-muted">
+              {order.canCancel ? "Card charged on" : "Charge date"}
+            </dt>
+            <dd className="text-ink">{formatWeekday(order.cancellationDeadline)}</dd>
+          </div>
+        </dl>
+      </div>
+
+      {order.canCancel ? (
+        <form action={cancelOrderAction} className="card">
+          <input type="hidden" name="orderId" value={order.id} />
+          <p className="text-[15px] text-muted">
+            You can cancel free until{" "}
+            <strong className="text-ink">{formatWeekday(order.cancellationDeadline)}</strong>.
+            After that your card is charged and the order is on its way.
+          </p>
+          <button type="submit" className="btn-secondary mt-4">Cancel this order</button>
+        </form>
+      ) : order.status === "committed" ? (
+        <p className="text-sm text-muted">
+          The cancellation deadline has passed — your card is being charged.
         </p>
-        {order.status === "pending_payment" && order.paymentDueAt && (
-          <p className="mt-1 text-sm font-semibold text-tomato">
-            Pay by {formatDate(order.paymentDueAt)} or the order is cancelled and
-            refunded.
-          </p>
-        )}
-        {order.status !== "cancelled" && order.estimatedDeliveryAt && (
-          <p className="mt-1 text-sm text-saffron-ink">
-            Estimated delivery by {formatDate(order.estimatedDeliveryAt)}.
-          </p>
-        )}
-      </div>
-
-      {totalSavings > 0 && (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-[20px] bg-saffron px-5 py-4">
-          <p className="font-display text-[26px] text-saffron-ink">
-            Your group saved{" "}
-            <span className="font-sans font-extrabold text-tomato">
-              {formatGBP(totalSavings)}
-            </span>{" "}
-            against shop prices.
-          </p>
-          <a
-            href={whatsappUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="btn text-[#fffaf3]"
-            style={{ background: "#25a35a" }}
-          >
-            Share on WhatsApp
-          </a>
-        </div>
-      )}
-
-      {paid && myPayment?.status === "paid" && (
-        <div className="rounded-2xl bg-saffron px-4 py-3 text-sm text-saffron-ink">
-          Thanks — your share is paid. You&apos;ll see delivery updates below.
-        </div>
-      )}
-
-      <div className="grid gap-6 lg:grid-cols-[1fr_1.2fr]">
-        <div className="space-y-6">
-          {/* Your share */}
-          {myPayment && (
-            <div className="card">
-              <h2 className="eyebrow">Your share</h2>
-              <p className="mt-2 font-display text-[42px] leading-none text-ink">
-                {formatGBP(myPayment.amount)}
-              </p>
-              <p className="mt-1 text-sm text-muted">
-                {myPayment.portions} portion(s)
-                {myPayment.deliveryFee > 0
-                  ? ` · incl. ${formatGBP(myPayment.deliveryFee)} delivery`
-                  : order.commodity.deliveryFee > 0
-                    ? " · delivery free (organiser)"
-                    : ""}
-              </p>
-              <div className="mt-4">
-                {myPayment.status === "paid" ? (
-                  <span className="badge bg-saffron text-saffron-ink">Paid</span>
-                ) : order.status === "pending_payment" ? (
-                  <form action={payShareAction}>
-                    <input type="hidden" name="paymentId" value={myPayment.id} />
-                    <button type="submit" className="btn-primary w-full">
-                      Pay {formatGBP(myPayment.amount)}
-                    </button>
-                  </form>
-                ) : (
-                  <span className="badge bg-line-soft text-soft">Payment closed</span>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* Participants */}
-          <div className="card">
-            <h2 className="eyebrow">Participants</h2>
-            <table className="mt-3 w-full text-left text-sm">
-              <tbody className="divide-y divide-line-soft">
-                {order.payments.map((p) => (
-                  <tr key={p.id}>
-                    <td className="py-2.5 font-semibold text-ink">
-                      {p.user.name}
-                      {p.userId === user.id && (
-                        <span className="ml-2 text-xs text-soft">(you)</span>
-                      )}
-                    </td>
-                    <td className="py-2.5 text-soft">{p.portions} portion(s)</td>
-                    <td className="py-2.5 text-right">
-                      <span
-                        className={`inline-flex items-center rounded-full px-3 py-1 text-[11px] font-bold ${
-                          p.status === "paid"
-                            ? "bg-saffron text-saffron-ink"
-                            : "bg-tomato text-[#fffaf3]"
-                        }`}
-                      >
-                        {p.status === "paid" ? "Paid" : "Due"}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {!allPaid && order.status === "pending_payment" && (
-              <p className="mt-3 text-xs text-soft">
-                The order is bought once every share is paid.
-              </p>
-            )}
-          </div>
-        </div>
-
-        {/* Delivery — roast panel */}
-        <div className="rounded-3xl p-6" style={{ background: "#7c2d12" }}>
-          <div className="flex items-center justify-between">
-            <span className="eyebrow" style={{ color: "#e0a86a" }}>
-              Delivery
-            </span>
-            {order.estimatedDeliveryAt && (
-              <span className="text-xs text-[#e0a86a]">
-                Est. {formatDate(order.estimatedDeliveryAt)}
-              </span>
-            )}
-          </div>
-          <div className="mt-5">
-            <DeliveryTimeline status={order.status} events={order.events} onDark />
-          </div>
-        </div>
-      </div>
+      ) : null}
     </div>
   );
 }

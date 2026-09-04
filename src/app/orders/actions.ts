@@ -1,64 +1,34 @@
 "use server";
 
-import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { prisma } from "@/lib/prisma";
+import { redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth";
-import { stripe, stripeConfigured } from "@/lib/stripe";
-import { markPaymentPaid } from "@/lib/orders";
-import { requestBaseUrl } from "@/lib/base-url";
+import { cancelOrder } from "@/lib/joins";
 
-// Pay the current user's share of an order.
-// - With Stripe configured: creates a hosted Checkout session and redirects to it.
-// - Without Stripe (local dev): marks the share paid directly so the flow is testable.
-export async function payShareAction(formData: FormData): Promise<void> {
+export async function cancelOrderAction(formData: FormData): Promise<void> {
   const user = await requireUser();
-  const paymentId = String(formData.get("paymentId"));
+  const orderId = String(formData.get("orderId") ?? "");
+  if (!orderId) throw new Error("Missing order.");
 
-  const payment = await prisma.payment.findUnique({
-    where: { id: paymentId },
-    include: { order: { include: { commodity: true } } },
-  });
-  if (!payment || payment.userId !== user.id) return;
-  if (payment.status === "paid") redirect(`/orders/${payment.orderId}`);
-  if (payment.order.status !== "pending_payment") {
-    redirect(`/orders/${payment.orderId}`);
+  // cancelOrder owns the rules: it refuses after the deadline, refuses once a
+  // charge has been attempted, and detaches the saved card only when no other
+  // order still needs it. In particular it can lose a race to the cutoff cron,
+  // which claims the row between our guard read and its write — that failure
+  // is expected, not exceptional, so we route it back to the order page with
+  // a reason rather than letting it fall through to the default error screen.
+  let failed = false;
+  try {
+    await cancelOrder(orderId, user.id);
+  } catch {
+    failed = true;
   }
 
-  const baseUrl = await requestBaseUrl();
-
-  if (!stripeConfigured() || !stripe) {
-    // Dev fallback: settle immediately.
-    await markPaymentPaid(paymentId);
-    revalidatePath(`/orders/${payment.orderId}`);
-    redirect(`/orders/${payment.orderId}?paid=1`);
+  if (failed) {
+    // redirect() throws a Next.js control-flow signal — it must not be called
+    // inside the try/catch above, or this catch would swallow it too.
+    redirect(`/orders/${orderId}?cancelFailed=1`);
   }
 
-  const session = await stripe.checkout.sessions.create({
-    mode: "payment",
-    line_items: [
-      {
-        price_data: {
-          currency: "gbp",
-          product_data: {
-            name: `${payment.order.commodity.name} — ${payment.portions} portion(s)`,
-          },
-          unit_amount: payment.amount,
-        },
-        quantity: 1,
-      },
-    ],
-    success_url: `${baseUrl}/orders/${payment.orderId}?paid=1`,
-    cancel_url: `${baseUrl}/orders/${payment.orderId}`,
-    client_reference_id: paymentId,
-    metadata: { paymentId },
-    customer_email: user.email,
-  });
-
-  await prisma.payment.update({
-    where: { id: paymentId },
-    data: { stripeSessionId: session.id },
-  });
-
-  redirect(session.url!);
+  revalidatePath("/orders");
+  revalidatePath(`/orders/${orderId}`);
 }

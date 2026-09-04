@@ -49,14 +49,9 @@ export async function Nav() {
 
           {/* Desktop */}
           <div className="ml-auto hidden items-center gap-1 text-sm sm:flex">
-            <NavLink href="/catalog" dark={dark}>
-              Catalog
+            <NavLink href="/baskets" dark={dark}>
+              Baskets
             </NavLink>
-            {user && (
-              <NavLink href="/baskets" dark={dark}>
-                My baskets
-              </NavLink>
-            )}
             {user && (
               <NavLink href="/orders" dark={dark}>
                 Orders
@@ -81,9 +76,6 @@ export async function Nav() {
                 <button type="submit" className="btn-secondary py-2">
                   Sign out
                 </button>
-                <Link href="/catalog" className="btn-primary py-2">
-                  Start a basket
-                </Link>
               </form>
             ) : (
               <div className="ml-2 flex items-center gap-2">
@@ -115,7 +107,7 @@ export async function Nav() {
           </div>
         </nav>
       </header>
-      <MobileTabBar />
+      <MobileTabBar user={user} />
     </>
   );
 }
